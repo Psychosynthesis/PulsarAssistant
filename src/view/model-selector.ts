@@ -1,5 +1,6 @@
 import { CompositeDisposable } from "atom";
 import type { ModelInfo } from "./model-info";
+import { createElement } from "./utils";
 
 // A dropdown for the panel-local provider model choice. It deliberately owns only
 // presentation: the view keeps the selected model and fetches the model list.
@@ -16,26 +17,12 @@ export class ModelSelector {
     private readonly disabledReason?: () => string | null,
     private readonly closeSiblings?: () => void,
   ) {
-    this.element = document.createElement("div");
-    this.element.classList.add(
-      "pulsar-assistant-config",
-      "pulsar-assistant-model-selector",
-    );
+    this.element = createElement("div", { class: ["pulsar-assistant-config", "pulsar-assistant-model-selector"] });
 
-    this.menu = document.createElement("div");
-    this.menu.classList.add(
-      "pulsar-assistant-picker-menu",
-      "pulsar-assistant-model-menu",
-    );
+    this.menu = createElement("div", { class: ["pulsar-assistant-picker-menu", "pulsar-assistant-model-menu"], style: { display: "none" } });
     this.menu.setAttribute("role", "menu");
-    this.menu.style.display = "none";
 
-    this.button = document.createElement("button");
-    this.button.classList.add(
-      "btn",
-      "pulsar-assistant-config-trigger",
-      "pulsar-assistant-model-trigger",
-    );
+    this.button = createElement("button", { class: ["btn", "pulsar-assistant-config-trigger", "pulsar-assistant-model-trigger"] });
     this.button.setAttribute("aria-haspopup", "true");
     this.button.setAttribute("aria-expanded", "false");
     this.button.addEventListener("click", (event) => {
@@ -125,11 +112,7 @@ export class ModelSelector {
     }
 
     for (const model of models) {
-      const item = document.createElement("button");
-      item.classList.add(
-        "pulsar-assistant-picker-item",
-        "pulsar-assistant-model-item",
-      );
+      const item = createElement("button", { class: ["pulsar-assistant-picker-item", "pulsar-assistant-model-item"] });
       item.setAttribute("role", "menuitem");
       if (model.id === selectedId) {
         item.classList.add("is-active");

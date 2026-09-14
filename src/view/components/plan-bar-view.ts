@@ -3,6 +3,7 @@ import {
   completedPlanEntries,
   nextTurnActivePlanEntries,
 } from "../../util";
+import { createElement } from "../utils";
 
 export interface PlanBarHost {
   onPlanChanged?: () => void;
@@ -20,9 +21,7 @@ export class PlanBarView {
 
   constructor(host: PlanBarHost) {
     this.host = host;
-    this.element = document.createElement("div");
-    this.element.classList.add("pulsar-assistant-plan-bar");
-    this.element.style.display = "none";
+    this.element = createElement("div", { class: "pulsar-assistant-plan-bar", style: { display: "none" } });
   }
 
   getElement(): HTMLElement {
@@ -87,36 +86,25 @@ export class PlanBarView {
 
     const completed = completedPlanEntries(this.activePlanEntries);
     if (completed.length > 0) {
-      const card = document.createElement("div");
-      card.classList.add("pulsar-assistant-plan-card");
+      const card = createElement("div", { class: "pulsar-assistant-plan-card" });
       card.dataset.completedCount = String(completed.length);
 
-      const header = document.createElement("div");
-      header.classList.add("pulsar-assistant-plan-card-header");
+      const header = createElement("div", { class: "pulsar-assistant-plan-card-header" });
 
-      const icon = document.createElement("span");
-      icon.classList.add("icon", "icon-tasklist");
+      const icon = createElement("span", { class: ["icon", "icon-tasklist"] });
       header.appendChild(icon);
 
-      const title = document.createElement("span");
-      title.classList.add("pulsar-assistant-plan-card-title");
+      const title = createElement("span", { class: "pulsar-assistant-plan-card-title" });
       title.textContent = `Completed steps (${completed.length})`;
       header.appendChild(title);
       card.appendChild(header);
 
-      const list = document.createElement("ul");
-      list.classList.add("pulsar-assistant-plan-card-list");
+      const list = createElement("ul", { class: "pulsar-assistant-plan-card-list" });
       for (const entry of completed) {
-        const item = document.createElement("li");
-        item.classList.add(
-          "pulsar-assistant-plan-card-item",
-          "is-completed",
-        );
-        const checkIcon = document.createElement("span");
-        checkIcon.classList.add("icon", "icon-check");
+        const item = createElement("li", { class: ["pulsar-assistant-plan-card-item", "is-completed"] });
+        const checkIcon = createElement("span", { class: ["icon", "icon-check"] });
         item.appendChild(checkIcon);
-        const text = document.createElement("span");
-        text.classList.add("pulsar-assistant-plan-card-text");
+        const text = createElement("span", { class: "pulsar-assistant-plan-card-text" });
         text.textContent = entry.content;
         item.appendChild(text);
         list.appendChild(item);
@@ -163,22 +151,16 @@ export class PlanBarView {
       (e) => e.status === "in_progress",
     ).length;
 
-    const summary = document.createElement("div");
-    summary.classList.add("pulsar-assistant-plan-summary");
+    const summary = createElement("div", { class: "pulsar-assistant-plan-summary" });
     summary.addEventListener("click", () => {
       this.planExpanded = !this.planExpanded;
       this.render();
     });
 
-    const chevron = document.createElement("span");
-    chevron.classList.add(
-      "icon",
-      this.planExpanded ? "icon-chevron-down" : "icon-chevron-right",
-    );
+    const chevron = createElement("span", { class: ["icon", this.planExpanded ? "icon-chevron-down" : "icon-chevron-right"] });
     summary.appendChild(chevron);
 
-    const title = document.createElement("span");
-    title.classList.add("pulsar-assistant-plan-title");
+    const title = createElement("span", { class: "pulsar-assistant-plan-title" });
     title.textContent = `Plan (${completed}/${total} completed${
       inProgress ? `, ${inProgress} in progress` : ""
     })`;
@@ -186,17 +168,11 @@ export class PlanBarView {
     this.element.appendChild(summary);
 
     if (this.planExpanded) {
-      const list = document.createElement("ul");
-      list.classList.add("pulsar-assistant-plan-list");
+      const list = createElement("ul", { class: "pulsar-assistant-plan-list" });
       for (const entry of this.activePlanEntries) {
-        const item = document.createElement("li");
-        item.classList.add(
-          "pulsar-assistant-plan-entry",
-          `status-${entry.status}`,
-        );
+        const item = createElement("li", { class: ["pulsar-assistant-plan-entry", `status-${entry.status}`] });
 
-        const statusIcon = document.createElement("span");
-        statusIcon.classList.add("icon");
+        const statusIcon = createElement("span", { class: "icon" });
         if (entry.status === "completed") {
           statusIcon.classList.add("icon-check");
         } else if (entry.status === "in_progress") {
@@ -206,8 +182,7 @@ export class PlanBarView {
         }
         item.appendChild(statusIcon);
 
-        const text = document.createElement("span");
-        text.classList.add("pulsar-assistant-plan-entry-text");
+        const text = createElement("span", { class: "pulsar-assistant-plan-entry-text" });
         text.textContent = entry.content;
         item.appendChild(text);
 

@@ -6,6 +6,7 @@ import {
   FALLBACK_CONTEXT_WINDOW,
 } from "../token-estimate";
 import { safeProjectKey } from "../session-storage";
+import { createElement } from "./utils";
 
 interface ProjectStorageItem {
   projectRoot: string;
@@ -98,8 +99,7 @@ export class ProjectsStorageModal {
   private keydownHandler: (event: KeyboardEvent) => void;
 
   constructor() {
-    this.element = document.createElement("div");
-    this.element.classList.add("pulsar-assistant-projects-modal", "overlay", "modal");
+    this.element = createElement("div", { class: ["pulsar-assistant-projects-modal", "overlay", "modal"] });
 
     this.keydownHandler = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -132,15 +132,12 @@ export class ProjectsStorageModal {
     this.element.innerHTML = "";
 
     // Header
-    const header = document.createElement("div");
-    header.classList.add("pulsar-assistant-modal-header");
+    const header = createElement("div", { class: "pulsar-assistant-modal-header" });
 
-    const title = document.createElement("h2");
-    title.classList.add("pulsar-assistant-modal-title");
+    const title = createElement("h2", { class: "pulsar-assistant-modal-title" });
     title.textContent = "Pulsar Assistant: Projects & Storage";
 
-    const closeBtn = document.createElement("button");
-    closeBtn.classList.add("btn", "btn-default", "icon", "icon-x", "pulsar-assistant-modal-close");
+    const closeBtn = createElement("button", { class: ["btn", "btn-default", "icon", "icon-x", "pulsar-assistant-modal-close"] });
     closeBtn.setAttribute("aria-label", "Close");
     closeBtn.addEventListener("click", () => this.close());
 
@@ -148,8 +145,7 @@ export class ProjectsStorageModal {
     header.appendChild(closeBtn);
     this.element.appendChild(header);
 
-    const body = document.createElement("div");
-    body.classList.add("pulsar-assistant-modal-body");
+    const body = createElement("div", { class: "pulsar-assistant-modal-body" });
     this.element.appendChild(body);
 
     // Section 1: Model Context Windows
@@ -160,17 +156,14 @@ export class ProjectsStorageModal {
   }
 
   private renderContextWindowsSection(container: HTMLElement): void {
-    const section = document.createElement("div");
-    section.classList.add("pulsar-assistant-modal-section");
+    const section = createElement("div", { class: "pulsar-assistant-modal-section" });
 
-    const secHeader = document.createElement("div");
-    secHeader.classList.add("pulsar-assistant-section-header");
+    const secHeader = createElement("div", { class: "pulsar-assistant-section-header" });
 
     const title = document.createElement("h3");
     title.textContent = "Model Context Windows";
 
-    const editBtn = document.createElement("button");
-    editBtn.classList.add("btn", "btn-sm");
+    const editBtn = createElement("button", { class: ["btn", "btn-sm"] });
     editBtn.textContent = "Edit in config.cson\u2026";
     editBtn.addEventListener("click", () => {
       void atom.workspace.open(atom.config.getUserConfigPath());
@@ -180,8 +173,7 @@ export class ProjectsStorageModal {
     secHeader.appendChild(editBtn);
     section.appendChild(secHeader);
 
-    const desc = document.createElement("p");
-    desc.classList.add("text-muted");
+    const desc = createElement("p", { class: "text-muted" });
     desc.textContent =
       "Token context limits used for calculating dialog capacity. Add custom limits in config.cson under `pulsar-assistant.modelContextWindows`.";
     section.appendChild(desc);
@@ -191,11 +183,9 @@ export class ProjectsStorageModal {
         | Record<string, number>
         | undefined) || {};
 
-    const tableWrap = document.createElement("div");
-    tableWrap.classList.add("pulsar-assistant-table-scroll");
+    const tableWrap = createElement("div", { class: "pulsar-assistant-table-scroll" });
 
-    const table = document.createElement("table");
-    table.classList.add("pulsar-assistant-table");
+    const table = createElement("table", { class: "pulsar-assistant-table" });
 
     const thead = document.createElement("thead");
     thead.innerHTML = `
@@ -212,8 +202,7 @@ export class ProjectsStorageModal {
     // Custom items first
     for (const [name, limit] of Object.entries(customWindows)) {
       if (typeof limit === "number") {
-        const tr = document.createElement("tr");
-        tr.classList.add("pulsar-assistant-table-custom-row");
+        const tr = createElement("tr", { class: "pulsar-assistant-table-custom-row" });
         tr.innerHTML = `
           <td><strong>${name}</strong></td>
           <td>${limit.toLocaleString()} tokens</td>
@@ -251,21 +240,18 @@ export class ProjectsStorageModal {
   }
 
   private async renderProjectsSection(container: HTMLElement): Promise<void> {
-    const section = document.createElement("div");
-    section.classList.add("pulsar-assistant-modal-section");
+    const section = createElement("div", { class: "pulsar-assistant-modal-section" });
 
     const title = document.createElement("h3");
     title.textContent = "Saved Projects & Storage";
     section.appendChild(title);
 
-    const desc = document.createElement("p");
-    desc.classList.add("text-muted");
+    const desc = createElement("p", { class: "text-muted" });
     desc.textContent =
       "Stored sessions, conversation history, and B-tree file indexing cache on disk.";
     section.appendChild(desc);
 
-    const loading = document.createElement("div");
-    loading.classList.add("text-muted");
+    const loading = createElement("div", { class: "text-muted" });
     loading.textContent = "Scanning project storage\u2026";
     section.appendChild(loading);
 
@@ -340,18 +326,15 @@ export class ProjectsStorageModal {
     loading.remove();
 
     if (projectItems.size === 0) {
-      const empty = document.createElement("div");
-      empty.classList.add("pulsar-assistant-empty-state");
+      const empty = createElement("div", { class: "pulsar-assistant-empty-state" });
       empty.textContent = "No stored projects or sessions found.";
       section.appendChild(empty);
       return;
     }
 
-    const tableWrap = document.createElement("div");
-    tableWrap.classList.add("pulsar-assistant-table-scroll");
+    const tableWrap = createElement("div", { class: "pulsar-assistant-table-scroll" });
 
-    const table = document.createElement("table");
-    table.classList.add("pulsar-assistant-table");
+    const table = createElement("table", { class: "pulsar-assistant-table" });
 
     const thead = document.createElement("thead");
     thead.innerHTML = `
@@ -370,8 +353,7 @@ export class ProjectsStorageModal {
     for (const item of Array.from(projectItems.values())) {
       const row = document.createElement("tr");
 
-      const tdRoot = document.createElement("td");
-      tdRoot.classList.add("pulsar-assistant-project-path");
+      const tdRoot = createElement("td", { class: "pulsar-assistant-project-path" });
       tdRoot.textContent = item.projectRoot;
       tdRoot.title = item.projectRoot;
       row.appendChild(tdRoot);
@@ -390,15 +372,7 @@ export class ProjectsStorageModal {
       row.appendChild(tdSize);
 
       const tdActions = document.createElement("td");
-      const delBtn = document.createElement("button");
-      delBtn.classList.add(
-        "btn",
-        "btn-error",
-        "btn-sm",
-        "inline-block-tight",
-        "icon",
-        "icon-x",
-      );
+      const delBtn = createElement("button", { class: ["btn", "btn-error", "btn-sm", "inline-block-tight", "icon", "icon-x"] });
       delBtn.setAttribute("aria-label", "Delete project data");
       delBtn.title = "Delete project data";
 

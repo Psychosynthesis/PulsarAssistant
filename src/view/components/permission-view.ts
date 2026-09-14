@@ -1,5 +1,6 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import type { Disposable } from "atom";
+import { createElement } from "../utils";
 
 export interface PermissionHost {
   openLocation: (path: string, line?: number) => Promise<void>;
@@ -57,8 +58,7 @@ export class PermissionManager {
       );
       if (buttons && buttons.childElementCount > 0) {
         buttons.replaceChildren();
-        const note = document.createElement("span");
-        note.classList.add("pulsar-assistant-permission-settled");
+        const note = createElement("span", { class: "pulsar-assistant-permission-settled" });
         note.textContent = "Cancelled";
         block.appendChild(note);
       }
@@ -98,8 +98,7 @@ export class PermissionManager {
 
     this.host.onPermissionAwaiting?.();
 
-    const block = document.createElement("div");
-    block.classList.add("pulsar-assistant-permission");
+    const block = createElement("div", { class: "pulsar-assistant-permission" });
     block.dataset.toolTitle = toolTitle;
     if (kind) block.dataset.kind = kind;
 
@@ -116,35 +115,26 @@ export class PermissionManager {
       auth: "key",
     };
 
-    const header = document.createElement("div");
-    header.classList.add("pulsar-assistant-permission-header");
+    const header = createElement("div", { class: "pulsar-assistant-permission-header" });
 
-    const icon = document.createElement("span");
-    icon.classList.add(
-      "icon",
-      `icon-${(kind && kindIcons[kind]) || "question"}`,
-    );
+    const icon = createElement("span", { class: ["icon", `icon-${(kind && kindIcons[kind]) || "question"}`] });
     header.appendChild(icon);
 
-    const titleEl = document.createElement("span");
-    titleEl.classList.add("pulsar-assistant-permission-title");
+    const titleEl = createElement("span", { class: "pulsar-assistant-permission-title" });
     titleEl.textContent = `Permission required for ${toolTitle}`;
     header.appendChild(titleEl);
 
     if (kind) {
-      const tag = document.createElement("span");
-      tag.classList.add("pulsar-assistant-tag");
+      const tag = createElement("span", { class: "pulsar-assistant-tag" });
       tag.textContent = kind;
       header.appendChild(tag);
     }
     block.appendChild(header);
 
     if (toolCall?.locations && toolCall.locations.length > 0) {
-      const locList = document.createElement("div");
-      locList.classList.add("pulsar-assistant-permission-locations");
+      const locList = createElement("div", { class: "pulsar-assistant-permission-locations" });
       for (const loc of toolCall.locations) {
-        const link = document.createElement("button");
-        link.classList.add("btn-link", "pulsar-assistant-location");
+        const link = createElement("button", { class: ["btn-link", "pulsar-assistant-location"] });
         const lineSuffix = loc.line != null ? `:${loc.line}` : "";
         link.textContent = `${loc.path}${lineSuffix}`;
         link.addEventListener("click", () =>
@@ -156,13 +146,11 @@ export class PermissionManager {
     }
 
     if (toolCall?.content && toolCall.content.length > 0) {
-      const details = document.createElement("details");
-      details.classList.add("pulsar-assistant-permission-details");
+      const details = createElement("details", { class: "pulsar-assistant-permission-details" });
       const summary = document.createElement("summary");
       summary.textContent = "Details";
       details.appendChild(summary);
-      const inner = document.createElement("div");
-      inner.classList.add("pulsar-assistant-permission-content");
+      const inner = createElement("div", { class: "pulsar-assistant-permission-content" });
       for (const item of toolCall.content) {
         inner.appendChild(this.host.renderToolContent(item));
       }
@@ -171,28 +159,24 @@ export class PermissionManager {
     }
 
     if (toolCall?.rawInput) {
-      const details = document.createElement("details");
-      details.classList.add("pulsar-assistant-permission-details");
+      const details = createElement("details", { class: "pulsar-assistant-permission-details" });
       const summary = document.createElement("summary");
       summary.textContent = "Raw Arguments";
       details.appendChild(summary);
-      const pre = document.createElement("pre");
-      pre.classList.add("pulsar-assistant-code-block");
+      const pre = createElement("pre", { class: "pulsar-assistant-code-block" });
       pre.textContent = JSON.stringify(toolCall.rawInput, null, 2);
       details.appendChild(pre);
       block.appendChild(details);
     }
 
-    const buttons = document.createElement("div");
-    buttons.classList.add("pulsar-assistant-permission-buttons");
+    const buttons = createElement("div", { class: "pulsar-assistant-permission-buttons" });
 
     let settled = false;
     const settle = (optionId: string, chosenLabel: string) => {
       if (settled) return;
       settled = true;
       buttons.replaceChildren();
-      const note = document.createElement("span");
-      note.classList.add("pulsar-assistant-permission-settled");
+      const note = createElement("span", { class: "pulsar-assistant-permission-settled" });
       note.textContent = `Decision: ${chosenLabel}`;
       block.appendChild(note);
       respond({ outcome: { outcome: "selected", optionId } });
@@ -244,32 +228,26 @@ export class PermissionManager {
     this.removeAuthCard();
     this.awaitingAuth = true;
 
-    const card = document.createElement("div");
-    card.classList.add("pulsar-assistant-auth-card");
+    const card = createElement("div", { class: "pulsar-assistant-auth-card" });
     card.setAttribute("role", "region");
     card.setAttribute("aria-label", "Authentication required");
 
-    const header = document.createElement("div");
-    header.classList.add("pulsar-assistant-auth-header");
+    const header = createElement("div", { class: "pulsar-assistant-auth-header" });
 
-    const icon = document.createElement("span");
-    icon.classList.add("icon", "icon-key");
+    const icon = createElement("span", { class: ["icon", "icon-key"] });
     header.appendChild(icon);
 
-    const titleEl = document.createElement("span");
-    titleEl.classList.add("pulsar-assistant-auth-title");
+    const titleEl = createElement("span", { class: "pulsar-assistant-auth-title" });
     titleEl.textContent = "Agent requires authentication";
     header.appendChild(titleEl);
     card.appendChild(header);
 
-    const desc = document.createElement("div");
-    desc.classList.add("pulsar-assistant-auth-desc");
+    const desc = createElement("div", { class: "pulsar-assistant-auth-desc" });
     desc.textContent =
       "Select an authentication method to allow the agent to start:";
     card.appendChild(desc);
 
-    const list = document.createElement("div");
-    list.classList.add("pulsar-assistant-auth-methods");
+    const list = createElement("div", { class: "pulsar-assistant-auth-methods" });
 
     let settled = false;
     const settle = (
@@ -281,8 +259,7 @@ export class PermissionManager {
       this.awaitingAuth = false;
       list.replaceChildren();
       if (chosenLabel) {
-        const note = document.createElement("span");
-        note.classList.add("pulsar-assistant-auth-settled");
+        const note = createElement("span", { class: "pulsar-assistant-auth-settled" });
         note.textContent = `Authenticating: ${chosenLabel}\u2026`;
         card.appendChild(note);
       }

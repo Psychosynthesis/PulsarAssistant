@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-09-14
+
+- **Grep no longer returns full paths**:  only the path relative to the project root is displayed in the context and chat.
+- **Minor interface tweaks**
+
+## [0.7.0] - 2026-09-14
+
+- **Cursor HTTP Backend**: Added a Cursor Cloud HTTP backend (`type: "cursor"`) with remote agent lifecycle management (create, adopt, delete, status refresh), repository access validation, SSE streaming via the Cursor API, and branch/PR status notes.
+- **Targeted Diff Edits (`write_diff`)**: Added a `write_diff` tool for replacing either an exact line range (`startLine`/`endLine`) or a matched search string with `replace`/`content`, preserving the file's original line endings.
+- **Build Command**: Added per-project `buildCommand` support and a `run_build` tool, configurable from the project settings gear menu alongside the existing `Set test command…`.
+- **Tool Input Normalization**: Introduced `input-normalize` helpers to normalize LLM-provided paths, escaped slashes/line breaks, and to make `write_file` search-and-replace resilient to CRLF/LF differences and trailing whitespace.
+- **Grep Filesystem Fallback**: `grep` now falls back to walking the filesystem when the B-tree index is empty or stale, so fresh files are no longer reported as missing.
+- **Project Tree Initialization**: Ensured the project file tree is initialized before the first system prompt, eliminating the `(empty project)` overview placeholder.
+- **Session Model Restoration**: Switching sessions now restores the last model used in that session in the panel header.
+- **Removed Config Migration**: Removed legacy agent config seeding/migration; empty or missing configuration is now handled without auto-creating agents.
+
 ## [0.6.0] - 2026-09-12
 
 - **Find Files Tool (`find_files`)**: Replaced deprecated `glob` with a fast `find_files` tool supporting a clean DSL (`*`, `?`, `|`, `&`, `\`), `extensions` filtering, case-insensitivity, and B-tree index acceleration.

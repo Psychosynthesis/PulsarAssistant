@@ -1,5 +1,6 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import type { Disposable } from "atom";
+import { createElement } from "../utils";
 
 export interface ToolView {
   element: HTMLElement;
@@ -108,24 +109,20 @@ export class ToolCallManager {
     if (item.type === "content") {
       const block = item.content;
       if (block.type === "text") {
-        const p = document.createElement("div");
-        p.classList.add("pulsar-assistant-tool-text");
+        const p = createElement("div", { class: "pulsar-assistant-tool-text" });
         p.textContent = block.text;
         return p;
       }
-      const pre = document.createElement("pre");
-      pre.classList.add("pulsar-assistant-code-block");
+      const pre = createElement("pre", { class: "pulsar-assistant-code-block" });
       pre.textContent = JSON.stringify(block, null, 2);
       return pre;
     }
     if (item.type === "diff") {
-      const diffEl = document.createElement("pre");
-      diffEl.classList.add("pulsar-assistant-diff");
+      const diffEl = createElement("pre", { class: "pulsar-assistant-diff" });
       diffEl.textContent = item.newText;
       return diffEl;
     }
-    const pre = document.createElement("pre");
-    pre.classList.add("pulsar-assistant-code-block");
+    const pre = createElement("pre", { class: "pulsar-assistant-code-block" });
     pre.textContent = JSON.stringify(item, null, 2);
     return pre;
   }
@@ -142,37 +139,28 @@ export class ToolCallManager {
 
     this.host.onBeforeNewToolCall?.();
 
-    const block = document.createElement("div");
-    block.classList.add("pulsar-assistant-tool");
+    const block = createElement("div", { class: "pulsar-assistant-tool" });
     block.dataset.toolCallId = toolCall.toolCallId;
     if (toolCall.kind) block.dataset.kind = toolCall.kind;
 
-    const heading = document.createElement("div");
-    heading.classList.add("pulsar-assistant-tool-heading");
+    const heading = createElement("div", { class: "pulsar-assistant-tool-heading" });
 
-    const title = document.createElement("span");
-    title.classList.add("pulsar-assistant-tool-title");
+    const title = createElement("span", { class: "pulsar-assistant-tool-title" });
     title.textContent = toolCall.title || "Tool Call";
 
-    const status = document.createElement("span");
-    status.classList.add("pulsar-assistant-tool-status");
+    const status = createElement("span", { class: "pulsar-assistant-tool-status" });
     status.textContent = toolCall.status || "pending";
 
-    const summary = document.createElement("div");
-    summary.classList.add("pulsar-assistant-tool-summary");
-    summary.style.display = "none";
+    const summary = createElement("div", { class: "pulsar-assistant-tool-summary", style: { display: "none" } });
 
-    const toggle = document.createElement("button");
-    toggle.classList.add("pulsar-assistant-tool-toggle");
+    const toggle = createElement("button", { class: "pulsar-assistant-tool-toggle", style: { display: "none" } });
     toggle.textContent = "Show more";
-    toggle.style.display = "none";
 
     heading.appendChild(title);
     heading.appendChild(status);
     block.appendChild(heading);
 
-    const body = document.createElement("div");
-    body.classList.add("pulsar-assistant-tool-body");
+    const body = createElement("div", { class: "pulsar-assistant-tool-body" });
     block.appendChild(body);
     block.appendChild(summary);
     block.appendChild(toggle);
@@ -235,8 +223,7 @@ export class ToolCallManager {
       const loc = update.locations[0];
       view.location = loc;
       if (!view.heading.querySelector(".pulsar-assistant-location")) {
-        const link = document.createElement("button");
-        link.classList.add("btn-link", "pulsar-assistant-location");
+        const link = createElement("button", { class: ["btn-link", "pulsar-assistant-location"] });
         const lineSuffix = loc.line != null ? `:${loc.line}` : "";
         link.textContent = `${loc.path}${lineSuffix}`;
         link.addEventListener("click", (e) => {
@@ -263,8 +250,7 @@ export class ToolCallManager {
       view.diff = update.content![0].type === "diff";
     } else if (update.rawInput != null || update.rawOutput != null) {
       if (update.rawInput != null) {
-        const pre = document.createElement("pre");
-        pre.classList.add("pulsar-assistant-code-block");
+        const pre = createElement("pre", { class: "pulsar-assistant-code-block" });
         pre.textContent =
           typeof update.rawInput === "string"
             ? update.rawInput
@@ -272,8 +258,7 @@ export class ToolCallManager {
         view.body.appendChild(pre);
       }
       if (update.rawOutput != null) {
-        const pre = document.createElement("pre");
-        pre.classList.add("pulsar-assistant-code-block");
+        const pre = createElement("pre", { class: "pulsar-assistant-code-block" });
         pre.textContent =
           typeof update.rawOutput === "string"
             ? update.rawOutput

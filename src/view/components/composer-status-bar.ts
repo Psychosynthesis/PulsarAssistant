@@ -1,22 +1,25 @@
+import { createElement } from "../utils";
+
 export class ComposerStatusBar {
   private element: HTMLElement;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
-    this.element = document.createElement("div");
-    this.element.className = "pulsar-assistant-composer-status-bar";
-    this.element.style.cssText = [
-      "min-height: 18px",
-      "font-size: 11px",
-      "line-height: 18px",
-      "color: #6c99bb",
-      "padding: 2px 8px 0 8px",
-      "overflow: hidden",
-      "text-overflow: ellipsis",
-      "white-space: nowrap",
-      "display: none",
-      "user-select: text",
-    ].join("; ");
+    this.element = createElement("div", {
+      class: "pulsar-assistant-composer-status-bar",
+      style: {
+        minHeight: "18px",
+        fontSize: "11px",
+        lineHeight: "18px",
+        color: "#6c99bb",
+        padding: "2px 8px 0 8px",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        display: "none",
+        userSelect: "text",
+      },
+    });
   }
 
   getElement(): HTMLElement {

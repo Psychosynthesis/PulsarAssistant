@@ -1,4 +1,5 @@
 import { Disposable } from "atom";
+import { createElement } from "./utils";
 
 function formatTokens(num: number): string {
   if (num >= 1_000_000) {
@@ -20,19 +21,14 @@ export class ContextProgressBar {
   private currentMax = 128_000;
 
   constructor() {
-    this.element = document.createElement("div");
-    this.element.classList.add("pulsar-assistant-context-progress");
-    this.element.style.display = "none";
+    this.element = createElement("div", { class: "pulsar-assistant-context-progress", style: { display: "none" } });
 
-    this.barTrack = document.createElement("div");
-    this.barTrack.classList.add("pulsar-assistant-context-track");
+    this.barTrack = createElement("div", { class: "pulsar-assistant-context-track" });
 
-    this.barFill = document.createElement("div");
-    this.barFill.classList.add("pulsar-assistant-context-fill");
+    this.barFill = createElement("div", { class: "pulsar-assistant-context-fill" });
     this.barTrack.appendChild(this.barFill);
 
-    this.label = document.createElement("span");
-    this.label.classList.add("pulsar-assistant-context-label");
+    this.label = createElement("span", { class: "pulsar-assistant-context-label" });
     this.label.textContent = "0% context";
 
     this.element.appendChild(this.barTrack);

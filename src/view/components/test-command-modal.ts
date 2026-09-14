@@ -1,4 +1,5 @@
 import { Panel } from "atom";
+import { createElement } from "../utils";
 
 export type ProjectCommandModalOptions = {
   projectRoot: string;
@@ -16,15 +17,7 @@ export class ProjectCommandModal {
   private keydownHandler: (event: KeyboardEvent) => void;
 
   constructor(private readonly options: ProjectCommandModalOptions) {
-    this.element = document.createElement("div");
-    this.element.classList.add(
-      "pulsar-assistant-projects-modal",
-      "pulsar-assistant-test-command-modal",
-      "overlay",
-      "modal",
-    );
-    this.element.style.maxWidth = "520px";
-    this.element.style.overflow = "visible";
+    this.element = createElement("div", { class: ["pulsar-assistant-projects-modal", "pulsar-assistant-test-command-modal", "overlay", "modal"], style: { maxWidth: "520px", overflow: "visible" } });
 
     this.keydownHandler = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -63,21 +56,12 @@ export class ProjectCommandModal {
   private render(): void {
     this.element.innerHTML = "";
 
-    const header = document.createElement("div");
-    header.classList.add("pulsar-assistant-modal-header");
+    const header = createElement("div", { class: "pulsar-assistant-modal-header" });
 
-    const title = document.createElement("h2");
-    title.classList.add("pulsar-assistant-modal-title");
+    const title = createElement("h2", { class: "pulsar-assistant-modal-title" });
     title.textContent = this.options.title ?? "Set command";
 
-    const closeBtn = document.createElement("button");
-    closeBtn.classList.add(
-      "btn",
-      "btn-default",
-      "icon",
-      "icon-x",
-      "pulsar-assistant-modal-close",
-    );
+    const closeBtn = createElement("button", { class: ["btn", "btn-default", "icon", "icon-x", "pulsar-assistant-modal-close"] });
     closeBtn.setAttribute("aria-label", "Close");
     closeBtn.addEventListener("click", () => this.close());
 
@@ -85,26 +69,15 @@ export class ProjectCommandModal {
     header.appendChild(closeBtn);
     this.element.appendChild(header);
 
-    const label = document.createElement("label");
-    label.classList.add("pulsar-assistant-test-command-label");
+    const label = createElement("label", { class: "pulsar-assistant-test-command-label", style: { display: "block", marginBottom: "6px" } });
     label.textContent =
       this.options.label ?? "Command used by the tool in this project";
     label.htmlFor = "pulsar-assistant-test-command-input";
-    label.style.display = "block";
-    label.style.marginBottom = "6px";
 
-    this.input = document.createElement("input");
-    this.input.id = "pulsar-assistant-test-command-input";
+    this.input = createElement("input", { id: "pulsar-assistant-test-command-input", class: ["input-text", "native-key-bindings", "pulsar-assistant-test-command-input"], style: { width: "100%", boxSizing: "border-box" } });
     this.input.type = "text";
-    this.input.classList.add(
-      "input-text",
-      "native-key-bindings",
-      "pulsar-assistant-test-command-input",
-    );
     this.input.placeholder = this.options.placeholder ?? "npm test";
     this.input.spellcheck = false;
-    this.input.style.width = "100%";
-    this.input.style.boxSizing = "border-box";
     this.input.value = this.options.currentCommand ?? "";
     this.input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
@@ -113,28 +86,17 @@ export class ProjectCommandModal {
       }
     });
 
-    const hint = document.createElement("div");
-    hint.classList.add("pulsar-assistant-test-command-hint");
+    const hint = createElement("div", { class: "pulsar-assistant-test-command-hint", style: { marginTop: "8px", color: "var(--text-color-subtle)", fontSize: "0.85em" } });
     hint.textContent =
       "Run from the project root without a shell. Leave empty to clear.";
-    hint.style.marginTop = "8px";
-    hint.style.color = "var(--text-color-subtle)";
-    hint.style.fontSize = "0.85em";
 
-    const actions = document.createElement("div");
-    actions.classList.add("pulsar-assistant-modal-actions");
-    actions.style.display = "flex";
-    actions.style.justifyContent = "flex-end";
-    actions.style.gap = "8px";
-    actions.style.marginTop = "16px";
+    const actions = createElement("div", { class: "pulsar-assistant-modal-actions", style: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "16px" } });
 
-    const cancelBtn = document.createElement("button");
-    cancelBtn.classList.add("btn");
+    const cancelBtn = createElement("button", { class: "btn" });
     cancelBtn.textContent = "Cancel";
     cancelBtn.addEventListener("click", () => this.close());
 
-    const saveBtn = document.createElement("button");
-    saveBtn.classList.add("btn", "btn-primary");
+    const saveBtn = createElement("button", { class: ["btn", "btn-primary"] });
     saveBtn.textContent = "Save";
     saveBtn.addEventListener("click", () => this.save());
 

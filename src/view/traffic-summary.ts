@@ -1,5 +1,6 @@
 import { CompositeDisposable, Disposable } from "atom";
 import type { PulsarAssistantView } from "./agent-view";
+import { createElement } from "./utils";
 
 type Traffic = {
   requests: number;
@@ -42,9 +43,7 @@ export function attachTrafficSummary(view: PulsarAssistantView): Disposable {
     .querySelector<HTMLElement>(".pulsar-assistant-header-row2");
   if (!root) return new Disposable(() => {});
 
-  const span = document.createElement("span");
-  span.classList.add("pulsar-assistant-traffic");
-  span.style.display = "none";
+  const span = createElement("span", { class: "pulsar-assistant-traffic", style: { display: "none" } });
   const live = root.querySelector(".pulsar-assistant-token-usage");
   root.insertBefore(span, live);
 

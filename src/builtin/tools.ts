@@ -850,9 +850,10 @@ async function grepTool(
     fileTree,
   });
   if (matches.length === 0) return { output: "No matches." };
-  const lines = matches.map(
-    (match) => `${match.path}:${match.line}:${match.text}`,
-  );
+  const lines = matches.map((match) => {
+    const relPath = path.relative(cwd, match.path).replace(/\\/g, "/");
+    return `${relPath}:${match.line}:${match.text}`;
+  });
   return { output: lines.join("\n") };
 }
 

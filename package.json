@@ -50,7 +50,6 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "watch": "node build.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test": "node --test",
     "prepare": "git config core.hooksPath ./.github/.hooks || echo 'Not in a git repo'"
@@ -104,5 +103,16 @@
       "title": "Ignored Directories",
       "description": "Directory names to ignore when searching with grep/glob and indexing files for the project file tree (B-tree)."
     }
+  },
+  "prettier": {
+    "trailingComma": "es5",
+    "tabWidth": 2,
+    "semi": true,
+    "singleQuote": true,
+    "printWidth": 140,
+    "quoteProps": "consistent",
+    "bracketSpacing": true,
+    "bracketSameLine": true,
+    "arrowParens": "avoid"
   }
 }

@@ -2,6 +2,7 @@ import { CompositeDisposable, Disposable } from "atom";
 import type { StatusBar, Tile } from "atom/status-bar";
 import type { AgentStatus } from "./agent-view";
 import { resolveCurrentProjectRoot, sameProjectRoot } from "../workspace";
+import { createElement } from "./utils";
 
 const STATUS_LABELS: Record<AgentStatus, string> = {
   idle: "Idle",
@@ -37,18 +38,14 @@ export class StatusIndicator implements AgentStatusReporter {
 
   constructor(onClick: () => void) {
     this.onClick = onClick;
-    this.element = document.createElement("a");
-    this.element.classList.add("pulsar-assistant-status-tile", "inline-block");
+    this.element = createElement("a", { class: ["pulsar-assistant-status-tile", "inline-block"] });
     this.element.addEventListener("click", () => this.onClick());
 
-    const icon = document.createElement("span");
-    icon.classList.add("icon", "icon-hubot");
+    const icon = createElement("span", { class: ["icon", "icon-hubot"] });
 
-    this.nameEl = document.createElement("span");
-    this.nameEl.classList.add("pulsar-assistant-status-tile-name");
+    this.nameEl = createElement("span", { class: "pulsar-assistant-status-tile-name" });
 
-    this.dotEl = document.createElement("span");
-    this.dotEl.classList.add("pulsar-assistant-status-tile-dot");
+    this.dotEl = createElement("span", { class: "pulsar-assistant-status-tile-dot" });
 
     this.element.appendChild(icon);
     this.element.appendChild(this.nameEl);

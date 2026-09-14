@@ -22,7 +22,11 @@ import {
   type BuiltinHost,
 } from "./tools";
 import { contentBlocksToText } from "../session/prompt-text";
-import { MAX_TOOL_ITERATIONS } from "../constants";
+import {
+  API_HOST_CONTEXT_MESSAGE,
+  MAX_TOOL_ITERATIONS,
+  TOOL_OUTPUT_COMPACT_INTERVAL,
+} from "../constants";
 
 import type { ProjectPolicy } from "../project-policy";
 import type { OpenaiLaunchTarget } from "../agent-config";
@@ -40,6 +44,7 @@ type SessionState = {
   pending: AbortController | null;
   seenToolMessages: Set<StoredContextMessage>;
   grepResultSummaries: Map<StoredContextMessage, string>;
+  toolRequestCount: number;
 };
 
 function systemPrompt(
@@ -48,7 +53,7 @@ function systemPrompt(
   policy?: ProjectPolicy,
 ): string {
   const parts = [
-    "You are a coding agent inside the Pulsar editor, talking to an OpenAI-compatible API.",
+    API_HOST_CONTEXT_MESSAGE,
     `The project working directory is ${cwd}. Stay inside it.`,
     "Use read_file, write_file, write_diff, move_file, find_files, get_file_structure, list_dir, grep, and git to inspect and change the project.",
     "Prefer grep/find_files/list_dir over running programs for search. grep performs literal substring search across project files. find_files matches file names with DSL patterns (*, ?, |, &, \\) and extension filters.",
@@ -331,6 +336,7 @@ export class BuiltinAgent {
       pending: null,
       seenToolMessages: new Set(),
       grepResultSummaries: new Map(),
+      toolRequestCount: 0,
     };
     this.sessions.set(sessionId, session);
     await this.persistSession(session);
@@ -367,6 +373,7 @@ export class BuiltinAgent {
           pending: null,
           seenToolMessages: new Set(),
           grepResultSummaries: new Map(),
+          toolRequestCount: 0,
         };
         this.sessions.set(sessionId, session);
       }
@@ -438,7 +445,12 @@ export class BuiltinAgent {
   }
 
   /**
-   * Compacts conversation context by summarizing tool call outputs and assistant write payloads.
+   * Compacts conversation context by summarizing tool call outputs and
+   * assistant write payloads.
+   *
+   * Tool output clearing is deliberately kept as a separate helper so it can
+   * also run automatically every N tool requests without triggering the rest
+   * of the full compaction flow.
    */
   async compactContext(
     sessionId: string,
@@ -446,16 +458,34 @@ export class BuiltinAgent {
     const session = this.sessions.get(sessionId);
     if (!session) return { compactedCount: 0 };
 
+    let compactedCount = this.compactToolMessages(session);
+    for (const msg of session.messages) {
+      if (compactAssistantMessage(msg)) {
+        compactedCount++;
+      }
+    }
+
+    if (compactedCount > 0) {
+      await this.persistSession(session);
+    }
+    return { compactedCount };
+  }
+
+  private compactToolMessages(session: SessionState): number {
     let compactedCount = 0;
     for (const msg of session.messages) {
       if (compactToolMessage(msg)) {
         compactedCount++;
         session.seenToolMessages.add(msg);
-      } else if (compactAssistantMessage(msg)) {
-        compactedCount++;
       }
     }
+    return compactedCount;
+  }
 
+  private async compactToolOutputs(
+    session: SessionState,
+  ): Promise<{ compactedCount: number }> {
+    const compactedCount = this.compactToolMessages(session);
     if (compactedCount > 0) {
       await this.persistSession(session);
     }
@@ -631,6 +661,23 @@ export class BuiltinAgent {
   }
 
   private async handleToolCall(
+    sessionId: string,
+    session: SessionState,
+    call: ChatToolCall,
+    signal: AbortSignal,
+  ): Promise<void> {
+    session.toolRequestCount += 1;
+    try {
+      await this.handleToolCallInner(sessionId, session, call, signal);
+    } finally {
+      if (session.toolRequestCount >= TOOL_OUTPUT_COMPACT_INTERVAL) {
+        session.toolRequestCount = 0;
+        await this.compactToolOutputs(session);
+      }
+    }
+  }
+
+  private async handleToolCallInner(
     sessionId: string,
     session: SessionState,
     call: ChatToolCall,

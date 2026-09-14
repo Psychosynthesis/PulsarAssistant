@@ -48,6 +48,7 @@ import { TestCommandModal, BuildCommandModal } from "./components/test-command-m
 import type { AgentStatusReporter } from "./status-indicator";
 import { estimateSessionTokens, resolveContextWindow } from "../token-estimate";
 import { fileUri } from "../util";
+import { createElement } from "./utils";
 
 /**
  * Architecture note - View Refactoring:
@@ -613,20 +614,15 @@ export class PulsarAssistantView {
   }
 
   private buildUI(): void {
-    this.element = document.createElement("div");
-    this.element.classList.add("pulsar-assistant");
+    this.element = createElement("div", { class: "pulsar-assistant" });
     this.element.tabIndex = -1;
 
-    const header = document.createElement("div");
-    header.classList.add("pulsar-assistant-header");
+    const header = createElement("div", { class: "pulsar-assistant-header" });
 
-    const row1 = document.createElement("div");
-    row1.classList.add("pulsar-assistant-header-row1");
+    const row1 = createElement("div", { class: "pulsar-assistant-header-row1" });
 
-    const pickerWrap = document.createElement("div");
-    pickerWrap.classList.add("pulsar-assistant-picker-wrap");
-    this.agentPicker = document.createElement("button");
-    this.agentPicker.classList.add("pulsar-assistant-picker");
+    const pickerWrap = createElement("div", { class: "pulsar-assistant-picker-wrap" });
+    this.agentPicker = createElement("button", { class: "pulsar-assistant-picker" });
     this.agentPicker.setAttribute("aria-haspopup", "menu");
     this.agentPicker.setAttribute("aria-controls", this.agentMenuId);
     this.agentPicker.setAttribute("aria-expanded", "false");
@@ -640,9 +636,7 @@ export class PulsarAssistantView {
         placement: "right",
       }),
     );
-    this.agentMenu = document.createElement("div");
-    this.agentMenu.classList.add("pulsar-assistant-picker-menu");
-    this.agentMenu.id = this.agentMenuId;
+    this.agentMenu = createElement("div", { class: "pulsar-assistant-picker-menu", id: this.agentMenuId });
     this.agentMenu.setAttribute("role", "menu");
     this.agentMenu.setAttribute("aria-label", "Agents");
     this.agentMenu.style.display = "none";
@@ -698,9 +692,7 @@ export class PulsarAssistantView {
     );
     row1.appendChild(pickerWrap);
 
-    this.modelSelectorWrap = document.createElement("div");
-    this.modelSelectorWrap.classList.add("pulsar-assistant-model-wrap");
-    this.modelSelectorWrap.style.display = "none";
+    this.modelSelectorWrap = createElement("div", { class: "pulsar-assistant-model-wrap", style: { display: "none" } });
     this.modelSelector = new ModelSelector(
       (id) => this.selectModel(id),
       () => this.modelSelectorDisabled(),
@@ -744,14 +736,8 @@ export class PulsarAssistantView {
       ),
     );
 
-    this.compactButton = document.createElement("button");
-    this.compactButton.classList.add(
-      "pulsar-assistant-compact-context",
-      "icon",
-      "icon-fold",
-    );
+    this.compactButton = createElement("button", { class: ["pulsar-assistant-compact-context", "icon", "icon-fold"], style: { display: "none" } });
     this.compactButton.setAttribute("aria-label", "Compact context");
-    this.compactButton.style.display = "none";
     this.subscriptions.add(
       atom.tooltips.add(this.compactButton, {
         title: "Compact conversation context",
@@ -761,15 +747,9 @@ export class PulsarAssistantView {
       void this.compactContext();
     });
 
-    this.sessionsToggle = document.createElement("button");
-    this.sessionsToggle.classList.add(
-      "pulsar-assistant-sessions-toggle",
-      "icon",
-      "icon-history",
-    );
+    this.sessionsToggle = createElement("button", { class: ["pulsar-assistant-sessions-toggle", "icon", "icon-history"], style: { display: "none" } });
     this.sessionsToggle.setAttribute("aria-label", "Sessions");
     this.sessionsToggle.setAttribute("aria-expanded", "false");
-    this.sessionsToggle.style.display = "none";
     this.subscriptions.add(
       atom.tooltips.add(this.sessionsToggle, { title: "Sessions" }),
     );
@@ -777,30 +757,16 @@ export class PulsarAssistantView {
       this.setSessionsListVisible(!this.sessionsListVisible);
     });
 
-    this.newSessionButton = document.createElement("button");
-    this.newSessionButton.classList.add(
-      "pulsar-assistant-new-session",
-      "icon",
-      "icon-plus",
-    );
+    this.newSessionButton = createElement("button", { class: ["pulsar-assistant-new-session", "icon", "icon-plus"], style: { display: "none" } });
     this.newSessionButton.setAttribute("aria-label", "New session");
-    this.newSessionButton.style.display = "none";
     this.subscriptions.add(
       atom.tooltips.add(this.newSessionButton, { title: "New session" }),
     );
     this.newSessionButton.addEventListener("click", () => this.startNewSession());
 
-    const settingsWrap = document.createElement("div");
-    settingsWrap.classList.add("pulsar-assistant-settings-wrap");
-    settingsWrap.style.position = "relative";
+    const settingsWrap = createElement("div", { class: "pulsar-assistant-settings-wrap", style: { position: "relative" } });
 
-    this.settingsButton = document.createElement("button");
-    this.settingsButton.classList.add(
-      "pulsar-assistant-settings-toggle",
-      "pulsar-assistant-sessions-toggle",
-      "icon",
-      "icon-gear",
-    );
+    this.settingsButton = createElement("button", { class: ["pulsar-assistant-settings-toggle", "pulsar-assistant-sessions-toggle", "icon", "icon-gear"] });
     this.settingsButton.setAttribute("aria-label", "Project settings");
     this.settingsButton.setAttribute("aria-haspopup", "menu");
     this.settingsButton.setAttribute("aria-expanded", "false");
@@ -814,20 +780,12 @@ export class PulsarAssistantView {
       }),
     );
 
-    this.settingsMenu = document.createElement("div");
-    this.settingsMenu.classList.add(
-      "pulsar-assistant-picker-menu",
-      "pulsar-assistant-settings-menu",
-    );
+    this.settingsMenu = createElement("div", { class: ["pulsar-assistant-picker-menu", "pulsar-assistant-settings-menu"], style: { display: "none", left: "auto", right: "0" } });
     this.settingsMenu.setAttribute("role", "menu");
     this.settingsMenu.setAttribute("aria-label", "Project settings");
-    this.settingsMenu.style.display = "none";
-    this.settingsMenu.style.left = "auto";
-    this.settingsMenu.style.right = "0";
 
     const addSettingsItem = (label: string, onSelect: () => void): void => {
-      const item = document.createElement("button");
-      item.classList.add("pulsar-assistant-picker-item");
+      const item = createElement("button", { class: "pulsar-assistant-picker-item" });
       item.setAttribute("role", "menuitem");
       item.textContent = label;
       item.addEventListener("click", () => {
@@ -877,16 +835,12 @@ export class PulsarAssistantView {
       ),
     );
 
-    this.sessionsList = document.createElement("div");
-    this.sessionsList.classList.add("pulsar-assistant-sessions-list");
-    this.sessionsList.style.display = "none";
+    this.sessionsList = createElement("div", { class: "pulsar-assistant-sessions-list", style: { display: "none" } });
 
-    this.infoButton = document.createElement("button");
-    this.infoButton.classList.add("pulsar-assistant-info-toggle");
+    this.infoButton = createElement("button", { class: "pulsar-assistant-info-toggle", style: { display: "none" } });
     this.infoButton.textContent = "More\u2026";
     this.infoButton.setAttribute("aria-label", "Agent details");
     this.infoButton.setAttribute("aria-expanded", "false");
-    this.infoButton.style.display = "none";
     this.infoButton.addEventListener("click", () =>
       this.setInfoPanelOpen(!this.infoPanelOpen),
     );
@@ -897,13 +851,10 @@ export class PulsarAssistantView {
       }),
     );
 
-    this.runtimeStatusEl = document.createElement("div");
-    this.runtimeStatusEl.classList.add("pulsar-assistant-header-row2");
-    this.liveStatusEl = document.createElement("span");
-    this.liveStatusEl.classList.add("pulsar-assistant-token-usage");
+    this.runtimeStatusEl = createElement("div", { class: "pulsar-assistant-header-row2" });
+    this.liveStatusEl = createElement("span", { class: "pulsar-assistant-token-usage" });
 
-    const rightGroup = document.createElement("div");
-    rightGroup.classList.add("pulsar-assistant-header-right");
+    const rightGroup = createElement("div", { class: "pulsar-assistant-header-right" });
     rightGroup.appendChild(this.compactButton);
     rightGroup.appendChild(this.sessionsToggle);
     rightGroup.appendChild(this.newSessionButton);
@@ -916,34 +867,23 @@ export class PulsarAssistantView {
     header.appendChild(row1);
     header.appendChild(this.runtimeStatusEl);
 
-    this.infoPanel = document.createElement("div");
-    this.infoPanel.classList.add("pulsar-assistant-info-panel");
-    this.infoPanel.style.display = "none";
+    this.infoPanel = createElement("div", { class: "pulsar-assistant-info-panel", style: { display: "none" } });
 
-    this.conversation = document.createElement("div");
-    this.conversation.classList.add("pulsar-assistant-conversation");
+    this.conversation = createElement("div", { class: "pulsar-assistant-conversation" });
     this.attachConversationScrollListener();
 
-    this.conversationWrapper = document.createElement("div");
-    this.conversationWrapper.classList.add("pulsar-assistant-conversation-wrapper");
+    this.conversationWrapper = createElement("div", { class: "pulsar-assistant-conversation-wrapper" });
 
-    this.loadingOverlay = document.createElement("div");
-    this.loadingOverlay.classList.add("pulsar-assistant-loading-overlay");
-    this.loadingOverlay.style.display = "none";
-    const loadingLabel = document.createElement("div");
-    loadingLabel.classList.add("pulsar-assistant-loading-label");
+    this.loadingOverlay = createElement("div", { class: "pulsar-assistant-loading-overlay", style: { display: "none" } });
+    const loadingLabel = createElement("div", { class: "pulsar-assistant-loading-label" });
     loadingLabel.textContent = "Loading session\u2026";
     this.loadingOverlay.appendChild(loadingLabel);
 
-    const footer = document.createElement("div");
-    footer.classList.add("pulsar-assistant-footer");
+    const footer = createElement("div", { class: "pulsar-assistant-footer" });
 
-    this.contextStrip = document.createElement("div");
-    this.contextStrip.classList.add("pulsar-assistant-context-strip");
-    this.contextStrip.style.display = "none";
+    this.contextStrip = createElement("div", { class: "pulsar-assistant-context-strip", style: { display: "none" } });
 
-    this.input = document.createElement("textarea");
-    this.input.classList.add("pulsar-assistant-input", "native-key-bindings");
+    this.input = createElement("textarea", { class: ["pulsar-assistant-input", "native-key-bindings"] });
     this.input.setAttribute("rows", "3");
     this.input.setAttribute(
       "placeholder",
@@ -964,8 +904,7 @@ export class PulsarAssistantView {
       this.updateInputControls();
     });
 
-    const actions = document.createElement("div");
-    actions.classList.add("pulsar-assistant-actions");
+    const actions = createElement("div", { class: "pulsar-assistant-actions" });
     this.sendButton = this.makeButton("Send", () => this.send());
     this.sendButton.classList.add("pulsar-assistant-send");
     this.stopButton = this.makeButton("Stop", () => {
@@ -976,11 +915,7 @@ export class PulsarAssistantView {
     this.stopButton.classList.add("pulsar-assistant-stop");
     this.stopButton.disabled = true;
 
-    this.autoApproveButton = document.createElement("button");
-    this.autoApproveButton.classList.add(
-      "btn",
-      "pulsar-assistant-auto-approve",
-    );
+    this.autoApproveButton = createElement("button", { class: ["btn", "pulsar-assistant-auto-approve"] });
     this.autoApproveButton.textContent = "Permissions: Ask";
     this.autoApproveButton.setAttribute("aria-pressed", "false");
     this.autoApproveButton.addEventListener("click", () => {
@@ -995,8 +930,7 @@ export class PulsarAssistantView {
       }),
     );
 
-    this.followButton = document.createElement("button");
-    this.followButton.classList.add("btn", "pulsar-assistant-follow");
+    this.followButton = createElement("button", { class: ["btn", "pulsar-assistant-follow"] });
     this.followButton.textContent = "Follow: Off";
     this.followButton.setAttribute("aria-pressed", "false");
     this.followButton.addEventListener("click", () => {
@@ -1024,8 +958,7 @@ export class PulsarAssistantView {
     actions.appendChild(this.buildToolDelayControl());
     actions.appendChild(this.autoApproveButton);
 
-    const actionButtons = document.createElement("div");
-    actionButtons.classList.add("pulsar-assistant-action-buttons");
+    const actionButtons = createElement("div", { class: "pulsar-assistant-action-buttons" });
     actionButtons.appendChild(this.followButton);
     actionButtons.appendChild(this.stopButton);
     actionButtons.appendChild(this.sendButton);
@@ -1042,15 +975,9 @@ export class PulsarAssistantView {
     this.conversationWrapper.appendChild(this.conversation);
     this.conversationWrapper.appendChild(this.loadingOverlay);
 
-    this.scrollToBottomButton = document.createElement("button");
-    this.scrollToBottomButton.classList.add(
-      "pulsar-assistant-scroll-to-bottom",
-      "icon",
-      "icon-chevron-down",
-    );
+    this.scrollToBottomButton = createElement("button", { class: ["pulsar-assistant-scroll-to-bottom", "icon", "icon-chevron-down"], style: { display: "none" } });
     this.scrollToBottomButton.textContent = "Scroll to bottom";
     this.scrollToBottomButton.setAttribute("aria-label", "Scroll to bottom");
-    this.scrollToBottomButton.style.display = "none";
     this.scrollToBottomButton.addEventListener("click", () => {
       this.stickToBottom = true;
       this.updateScrollToBottomButton();
@@ -1064,17 +991,14 @@ export class PulsarAssistantView {
   }
 
   private makeButton(label: string, onClick: () => void): HTMLButtonElement {
-    const button = document.createElement("button");
-    button.classList.add("btn");
+    const button = createElement("button", { class: "btn" });
     button.textContent = label;
     button.addEventListener("click", onClick);
     return button;
   }
 
   private buildConfigSelectors(): HTMLElement {
-    const container = document.createElement("div");
-    container.classList.add("pulsar-assistant-config-selectors");
-    container.style.display = "none";
+    const container = createElement("div", { class: "pulsar-assistant-config-selectors", style: { display: "none" } });
     this.configSelectorsContainer = container;
 
     const onDocClick = (event: MouseEvent) => {
@@ -1106,8 +1030,7 @@ export class PulsarAssistantView {
   }
 
   private buildTurnLimitControl(): HTMLElement {
-    const wrap = document.createElement("div");
-    wrap.classList.add("pulsar-assistant-turn-limit");
+    const wrap = createElement("div", { class: "pulsar-assistant-turn-limit" });
 
     const label = document.createElement("label");
     label.textContent = "Tool turns";
@@ -1163,8 +1086,7 @@ export class PulsarAssistantView {
   }
 
   private buildToolDelayControl(): HTMLElement {
-    const wrap = document.createElement("div");
-    wrap.classList.add("pulsar-assistant-turn-limit", "pulsar-assistant-tool-delay");
+    const wrap = createElement("div", { class: ["pulsar-assistant-turn-limit", "pulsar-assistant-tool-delay"] });
 
     const label = document.createElement("label");
     label.textContent = "Delay (ms)";
@@ -1476,28 +1398,22 @@ export class PulsarAssistantView {
     const info = this.storedAgentInfo;
     const caps = this.storedCapabilities;
 
-    const header = document.createElement("div");
-    header.classList.add("pulsar-assistant-info-header");
-    const title = document.createElement("span");
-    title.classList.add("pulsar-assistant-info-title");
+    const header = createElement("div", { class: "pulsar-assistant-info-header" });
+    const title = createElement("span", { class: "pulsar-assistant-info-title" });
     title.textContent = "Agent details";
-    const actions = document.createElement("div");
-    actions.classList.add("pulsar-assistant-info-actions");
+    const actions = createElement("div", { class: "pulsar-assistant-info-actions" });
     actions.appendChild(this.restartButton);
     header.appendChild(title);
     header.appendChild(actions);
     this.infoPanel.appendChild(header);
 
     const addRow = (label: string, content: HTMLElement | string): void => {
-      const row = document.createElement("div");
-      row.classList.add("pulsar-assistant-info-row");
-      const lbl = document.createElement("span");
-      lbl.classList.add("pulsar-assistant-info-label");
+      const row = createElement("div", { class: "pulsar-assistant-info-row" });
+      const lbl = createElement("span", { class: "pulsar-assistant-info-label" });
       lbl.textContent = label;
       row.appendChild(lbl);
       if (typeof content === "string") {
-        const val = document.createElement("span");
-        val.classList.add("pulsar-assistant-info-value");
+        const val = createElement("span", { class: "pulsar-assistant-info-value" });
         val.textContent = content;
         row.appendChild(val);
       } else {
@@ -1509,17 +1425,14 @@ export class PulsarAssistantView {
     const infoTable = (value: unknown): HTMLElement | null => {
       const rows = flattenInfoRows(value);
       if (rows.length === 0) return null;
-      const wrap = document.createElement("div");
-      wrap.classList.add("pulsar-assistant-info-table");
+      const wrap = createElement("div", { class: "pulsar-assistant-info-table" });
       const table = document.createElement("table");
       const body = document.createElement("tbody");
       for (const item of rows) {
         const row = document.createElement("tr");
-        const key = document.createElement("td");
-        key.classList.add("pulsar-assistant-info-key");
+        const key = createElement("td", { class: "pulsar-assistant-info-key" });
         key.textContent = item.key;
-        const val = document.createElement("td");
-        val.classList.add("pulsar-assistant-info-table-value");
+        const val = createElement("td", { class: "pulsar-assistant-info-table-value" });
         val.textContent = item.value;
         row.appendChild(key);
         row.appendChild(val);
@@ -1531,10 +1444,8 @@ export class PulsarAssistantView {
     };
 
     if (!info) {
-      const statusContent = document.createElement("div");
-      statusContent.classList.add("pulsar-assistant-info-version");
-      const statusValue = document.createElement("span");
-      statusValue.classList.add("pulsar-assistant-info-value");
+      const statusContent = createElement("div", { class: "pulsar-assistant-info-version" });
+      const statusValue = createElement("span", { class: "pulsar-assistant-info-value" });
       statusValue.textContent = this.lifecycleStatus || "Not connected.";
       statusContent.appendChild(statusValue);
       addRow("Status", statusContent);
@@ -1549,11 +1460,9 @@ export class PulsarAssistantView {
     const modelDescription = this.currentModelDescription();
     if (modelDescription) addRow("Model description", modelDescription);
 
-    const versionValue = document.createElement("span");
-    versionValue.classList.add("pulsar-assistant-info-value");
+    const versionValue = createElement("span", { class: "pulsar-assistant-info-value" });
     versionValue.textContent = info.version;
-    const versionContent = document.createElement("div");
-    versionContent.classList.add("pulsar-assistant-info-version");
+    const versionContent = createElement("div", { class: "pulsar-assistant-info-version" });
     versionContent.appendChild(versionValue);
     addRow("Version", versionContent);
 
@@ -1574,22 +1483,14 @@ export class PulsarAssistantView {
   }
 
   private buildSlashComposer(): HTMLElement {
-    const wrap = document.createElement("div");
-    wrap.classList.add("pulsar-assistant-slash-wrap");
+    const wrap = createElement("div", { class: "pulsar-assistant-slash-wrap" });
 
-    this.slashMenu = document.createElement("div");
-    this.slashMenu.classList.add(
-      "pulsar-assistant-picker-menu",
-      "pulsar-assistant-slash-menu",
-    );
-    this.slashMenu.id = this.slashMenuId;
+    this.slashMenu = createElement("div", { class: ["pulsar-assistant-picker-menu", "pulsar-assistant-slash-menu"], id: this.slashMenuId });
     this.slashMenu.setAttribute("role", "listbox");
     this.slashMenu.setAttribute("aria-label", "Slash commands");
     this.slashMenu.style.display = "none";
 
-    this.slashHint = document.createElement("div");
-    this.slashHint.classList.add("pulsar-assistant-slash-hint");
-    this.slashHint.style.display = "none";
+    this.slashHint = createElement("div", { class: "pulsar-assistant-slash-hint", style: { display: "none" } });
 
     wrap.appendChild(this.slashMenu);
     wrap.appendChild(this.input);
@@ -1653,22 +1554,15 @@ export class PulsarAssistantView {
   private renderSlashMenu(): void {
     this.slashMenu.innerHTML = "";
     this.slashMatches.forEach((command, index) => {
-      const item = document.createElement("button");
-      item.classList.add(
-        "pulsar-assistant-picker-item",
-        "pulsar-assistant-slash-item",
-      );
-      item.id = `${this.slashMenuId}-item-${index}`;
+      const item = createElement("button", { class: ["pulsar-assistant-picker-item", "pulsar-assistant-slash-item"], id: `${this.slashMenuId}-item-${index}` });
       item.setAttribute("role", "option");
       item.tabIndex = -1;
 
-      const name = document.createElement("span");
-      name.classList.add("pulsar-assistant-slash-name");
+      const name = createElement("span", { class: "pulsar-assistant-slash-name" });
       name.textContent = `/${command.name}`;
       item.appendChild(name);
       if (command.description) {
-        const desc = document.createElement("span");
-        desc.classList.add("pulsar-assistant-slash-desc");
+        const desc = createElement("span", { class: "pulsar-assistant-slash-desc" });
         desc.textContent = command.description;
         item.appendChild(desc);
       }
@@ -1946,8 +1840,7 @@ export class PulsarAssistantView {
     const groups = groupAgents(this.agentsConfig.agents);
     const selectedId = this.pickerSelectedId();
     for (const group of groups) {
-      const header = document.createElement("div");
-      header.classList.add("pulsar-assistant-picker-group");
+      const header = createElement("div", { class: "pulsar-assistant-picker-group" });
       header.textContent =
         group.type === "openai"
           ? "API"
@@ -1956,8 +1849,7 @@ export class PulsarAssistantView {
             : "ACP";
       this.agentMenu.appendChild(header);
       for (const [id, agent] of group.entries) {
-        const item = document.createElement("button");
-        item.classList.add("pulsar-assistant-picker-item");
+        const item = createElement("button", { class: "pulsar-assistant-picker-item" });
         item.setAttribute("role", "menuitem");
         if (id === selectedId) {
           item.classList.add("is-active");
@@ -1972,8 +1864,7 @@ export class PulsarAssistantView {
       }
     }
     if (groups.length === 0) {
-      const empty = document.createElement("div");
-      empty.classList.add("pulsar-assistant-picker-empty");
+      const empty = createElement("div", { class: "pulsar-assistant-picker-empty" });
       empty.textContent = "No agents configured";
       this.agentMenu.appendChild(empty);
     }
@@ -2235,8 +2126,7 @@ export class PulsarAssistantView {
   }
 
   private swapInFreshConversation(): void {
-    const fresh = document.createElement("div");
-    fresh.classList.add("pulsar-assistant-conversation");
+    const fresh = createElement("div", { class: "pulsar-assistant-conversation" });
     this.swapInConversation(fresh);
     this.resetConversationState();
   }
@@ -2269,15 +2159,10 @@ export class PulsarAssistantView {
     }
 
     if (!this.generatingIndicator) {
-      const el = document.createElement("div");
-      el.classList.add("pulsar-assistant-generating");
-
-      const icon = document.createElement("span");
-      icon.classList.add("pulsar-assistant-generating-spinner");
+      const el = createElement("div", { class: "pulsar-assistant-generating" });
+      const icon = createElement("span", { class: "pulsar-assistant-generating-spinner" });
+      const label = createElement("span", { class: "pulsar-assistant-generating-label" });
       el.appendChild(icon);
-
-      const label = document.createElement("span");
-      label.classList.add("pulsar-assistant-generating-label");
       el.appendChild(label);
 
       this.generatingIndicator = el;
@@ -2538,14 +2423,9 @@ export class PulsarAssistantView {
   }
 
   private appendMessage(role: string, text: string): HTMLElement {
-    const message = document.createElement("div");
-    message.classList.add(
-      "pulsar-assistant-message",
-      `pulsar-assistant-message--${role}`,
-    );
+    const message = createElement("div", { class: ["pulsar-assistant-message", `pulsar-assistant-message--${role}`] });
 
-    const label = document.createElement("div");
-    label.classList.add("pulsar-assistant-message-role");
+    const label = createElement("div", { class: "pulsar-assistant-message-role" });
     const labels: Record<string, string> = {
       user: "You",
       agent: "Agent",
@@ -2554,8 +2434,7 @@ export class PulsarAssistantView {
     };
     label.textContent = labels[role] || role;
 
-    const body = document.createElement("div");
-    body.classList.add("pulsar-assistant-message-body");
+    const body = createElement("div", { class: "pulsar-assistant-message-body" });
     body.textContent = text;
 
     message.appendChild(label);
@@ -2572,8 +2451,7 @@ export class PulsarAssistantView {
     const body = this.appendMessage("user", text);
     this.renderMarkdown(body, text);
     if (context.length > 0) {
-      const strip = document.createElement("div");
-      strip.classList.add("pulsar-assistant-message-context");
+      const strip = createElement("div", { class: "pulsar-assistant-message-context" });
       for (const item of context) {
         strip.appendChild(this.makeContextChip(item.kind, item.label));
       }
@@ -2582,15 +2460,11 @@ export class PulsarAssistantView {
   }
 
   private buildContextControl(): HTMLElement {
-    const wrapper = document.createElement("div");
-    wrapper.classList.add("pulsar-assistant-config", "pulsar-assistant-context");
-    wrapper.style.display = "none";
+    const wrapper = createElement("div", { class: ["pulsar-assistant-config", "pulsar-assistant-context"], style: { display: "none" } });
     this.contextControl = wrapper;
 
-    const menu = document.createElement("div");
-    menu.classList.add("pulsar-assistant-config-menu");
+    const menu = createElement("div", { class: "pulsar-assistant-config-menu", style: { display: "none" } });
     menu.setAttribute("role", "menu");
-    menu.style.display = "none";
     this.contextMenu = menu;
 
     this.addSelectionItem = this.makeContextMenuItem(
@@ -2614,13 +2488,7 @@ export class PulsarAssistantView {
     menu.appendChild(this.addSelectionItem);
     menu.appendChild(this.addFileItem);
 
-    const trigger = document.createElement("button");
-    trigger.classList.add(
-      "btn",
-      "icon",
-      "icon-plus",
-      "pulsar-assistant-context-trigger",
-    );
+    const trigger = createElement("button", { class: ["btn", "icon", "icon-plus", "pulsar-assistant-context-trigger"] });
     trigger.setAttribute("aria-label", "Attach to prompt");
     trigger.setAttribute("aria-haspopup", "true");
     trigger.setAttribute("aria-expanded", "false");
@@ -2667,14 +2535,11 @@ export class PulsarAssistantView {
     iconClass: string,
     onClick: () => void,
   ): HTMLButtonElement {
-    const item = document.createElement("button");
-    item.classList.add("pulsar-assistant-config-item");
+    const item = createElement("button", { class: "pulsar-assistant-config-item" });
     item.setAttribute("role", "menuitem");
-    const icon = document.createElement("span");
-    icon.classList.add("icon", iconClass);
+    const icon = createElement("span", { class: ["icon", iconClass] });
     item.appendChild(icon);
-    const name = document.createElement("span");
-    name.classList.add("pulsar-assistant-config-name");
+    const name = createElement("span", { class: "pulsar-assistant-config-name" });
     name.textContent = label;
     item.appendChild(name);
     item.addEventListener("click", () => {
@@ -2786,19 +2651,9 @@ export class PulsarAssistantView {
   }
 
   private makeContextChip(kind: "file" | "selection", label: string): HTMLElement {
-    const chip = document.createElement("span");
-    chip.classList.add(
-      "pulsar-assistant-context-chip",
-      `pulsar-assistant-context-chip--${kind}`,
-    );
-    const icon = document.createElement("span");
-    icon.classList.add(
-      "icon",
-      kind === "file" ? "icon-file" : "icon-code",
-      "pulsar-assistant-context-chip-icon",
-    );
-    const labelSpan = document.createElement("span");
-    labelSpan.classList.add("pulsar-assistant-context-chip-label");
+    const chip = createElement("span", { class: ["pulsar-assistant-context-chip", `pulsar-assistant-context-chip--${kind}`] });
+    const icon = createElement("span", { class: ["icon", kind === "file" ? "icon-file" : "icon-code", "pulsar-assistant-context-chip-icon"] });
+    const labelSpan = createElement("span", { class: "pulsar-assistant-context-chip-label" });
     labelSpan.textContent = label;
     chip.appendChild(icon);
     chip.appendChild(labelSpan);
@@ -2818,12 +2673,7 @@ export class PulsarAssistantView {
           ? path.basename(item.path)
           : `${path.basename(item.path)}:${item.rangeText}`;
       const chip = this.makeContextChip(item.kind, label);
-      const remove = document.createElement("button");
-      remove.classList.add(
-        "pulsar-assistant-context-chip-remove",
-        "icon",
-        "icon-x",
-      );
+      const remove = createElement("button", { class: ["pulsar-assistant-context-chip-remove", "icon", "icon-x"] });
       remove.setAttribute("aria-label", `Remove ${label}`);
       remove.addEventListener("click", () => this.removeContextItem(index));
       chip.appendChild(remove);
@@ -2930,20 +2780,14 @@ export class PulsarAssistantView {
   }
 
   private appendError(text: string): void {
-    const message = document.createElement("div");
-    message.classList.add(
-      "pulsar-assistant-message",
-      `pulsar-assistant-message--error`,
-    );
+    const message = createElement("div", { class: ["pulsar-assistant-message", "pulsar-assistant-message--error"] });
     const parts = text.split("\n\n");
     if (parts.length > 1) {
-      const header = document.createElement("div");
-      header.classList.add("pulsar-assistant-error-header");
+      const header = createElement("div", { class: "pulsar-assistant-error-header" });
       header.textContent = parts[0];
       message.appendChild(header);
 
-      const body = document.createElement("pre");
-      body.classList.add("pulsar-assistant-error-body");
+      const body = createElement("pre", { class: "pulsar-assistant-error-body" });
       body.textContent = parts.slice(1).join("\n\n");
       message.appendChild(body);
     } else {
@@ -2997,38 +2841,32 @@ export class PulsarAssistantView {
     const canLoad = this.session.canLoadSession();
 
     this.sessionsList.innerHTML = "";
-    const header = document.createElement("div");
-    header.classList.add("pulsar-assistant-sessions-header");
+    const header = createElement("div", { class: "pulsar-assistant-sessions-header" });
     header.textContent = "Sessions";
     this.sessionsList.appendChild(header);
 
     if (this.knownSessions.length === 0) {
-      const empty = document.createElement("div");
-      empty.classList.add("pulsar-assistant-sessions-empty");
+      const empty = createElement("div", { class: "pulsar-assistant-sessions-empty" });
       empty.textContent = "No sessions reported.";
       this.sessionsList.appendChild(empty);
       return;
     }
 
     for (const info of this.knownSessions) {
-      const row = document.createElement("div");
-      row.classList.add("pulsar-assistant-session-row");
+      const row = createElement("div", { class: "pulsar-assistant-session-row" });
       const isActive = info.sessionId === activeId;
       if (isActive) row.classList.add("is-active");
 
-      const selectBtn = document.createElement("button");
-      selectBtn.classList.add("pulsar-assistant-session-entry");
+      const selectBtn = createElement("button", { class: "pulsar-assistant-session-entry" });
       selectBtn.type = "button";
       if (isActive) selectBtn.setAttribute("aria-current", "true");
 
-      const title = document.createElement("span");
-      title.classList.add("pulsar-assistant-session-title");
+      const title = createElement("span", { class: "pulsar-assistant-session-title" });
       title.textContent = info.title || info.sessionId;
       selectBtn.appendChild(title);
 
       if (info.updatedAt) {
-        const time = document.createElement("span");
-        time.classList.add("pulsar-assistant-session-time");
+        const time = createElement("span", { class: "pulsar-assistant-session-time" });
         time.textContent = this.formatRelativeTime(info.updatedAt);
         selectBtn.appendChild(time);
       }
@@ -3043,12 +2881,7 @@ export class PulsarAssistantView {
       row.appendChild(selectBtn);
 
       if (canDelete) {
-        const deleteBtn = document.createElement("button");
-        deleteBtn.classList.add(
-          "pulsar-assistant-session-delete",
-          "icon",
-          "icon-trashcan",
-        );
+        const deleteBtn = createElement("button", { class: ["pulsar-assistant-session-delete", "icon", "icon-trashcan"] });
         deleteBtn.type = "button";
         deleteBtn.setAttribute("aria-label", "Delete session");
         this.sessionTooltips.add(

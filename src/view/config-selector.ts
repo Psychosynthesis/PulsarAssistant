@@ -1,6 +1,7 @@
 import { CompositeDisposable } from "atom";
 import * as acp from "@agentclientprotocol/sdk";
 import { configOptionLabel, flattenConfigSelectOptions } from "../util";
+import { createElement } from "./utils";
 
 export type SelectConfigOption = Extract<
   acp.SessionConfigOption,
@@ -25,16 +26,12 @@ export class ConfigSelector {
     private readonly disabled: () => boolean,
     private readonly closeSiblings: () => void,
   ) {
-    this.element = document.createElement("div");
-    this.element.classList.add("pulsar-assistant-config");
+    this.element = createElement("div", { class: "pulsar-assistant-config" });
 
-    this.menu = document.createElement("div");
-    this.menu.classList.add("pulsar-assistant-config-menu");
+    this.menu = createElement("div", { class: "pulsar-assistant-config-menu", style: { display: "none" } });
     this.menu.setAttribute("role", "menu");
-    this.menu.style.display = "none";
 
-    this.button = document.createElement("button");
-    this.button.classList.add("btn", "pulsar-assistant-config-trigger");
+    this.button = createElement("button", { class: ["btn", "pulsar-assistant-config-trigger"] });
     this.button.setAttribute("aria-haspopup", "true");
     this.button.setAttribute("aria-expanded", "false");
     this.button.addEventListener("click", (event) => {
@@ -102,15 +99,13 @@ export class ConfigSelector {
     }
 
     for (const choice of flattenConfigSelectOptions(option.options)) {
-      const item = document.createElement("button");
-      item.classList.add("pulsar-assistant-config-item");
+      const item = createElement("button", { class: "pulsar-assistant-config-item" });
       item.setAttribute("role", "menuitemradio");
       const isActive = choice.value === option.currentValue;
       item.setAttribute("aria-checked", String(isActive));
       if (isActive) item.classList.add("is-active");
 
-      const name = document.createElement("span");
-      name.classList.add("pulsar-assistant-config-name");
+      const name = createElement("span", { class: "pulsar-assistant-config-name" });
       name.textContent = choice.name;
       item.appendChild(name);
 
