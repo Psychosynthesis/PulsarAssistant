@@ -1,6 +1,6 @@
-import { randomUUID } from "crypto";
+import { randomBytes } from "crypto";
 import type * as acp from "@agentclientprotocol/sdk";
-import type { CursorLaunchTarget } from "../../agent-config";
+
 import {
   deleteSession as deleteStoredSession,
   listSessions as listStoredSessions,
@@ -10,8 +10,6 @@ import {
   type StoredSession,
 } from "../../session-storage";
 import { contentBlocksToText } from "../prompt-text";
-import type { AgentEvent } from "../types";
-import type { AgentBackend, BackendInitResult } from "./backend";
 import {
   CursorApiError,
   CursorClient,
@@ -25,6 +23,10 @@ import {
   toToolCallStatus,
   validateWorkingTree,
 } from "../../cursorClient";
+
+import type { CursorLaunchTarget } from "../../agent-config";
+import type { AgentEvent } from "../types";
+import type { AgentBackend, BackendInitResult } from "./backend";
 
 const CURSOR_AGENT_INFO: acp.Implementation = {
   name: "cursor-cloud-agents",
@@ -60,7 +62,7 @@ type CursorRunResult = {
 };
 
 function newId(): string {
-  return randomUUID();
+  return randomBytes(16).toString("hex");
 }
 
 function extractRunId(
@@ -198,7 +200,7 @@ export class CursorBackend implements AgentBackend {
   }
 
   private async createLocalSession(cwd: string): Promise<string> {
-    const sessionId = `bc-${randomUUID()}`;
+    const sessionId = `bc-${newId()}`;
     const state: CursorSessionState = {
       sessionId,
       cwd,
