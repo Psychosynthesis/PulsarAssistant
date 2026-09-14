@@ -4,11 +4,10 @@ import { parseCommandLine, runCapturedProcess } from "../util";
 import { findFiles, grepFiles, listDirectory } from "../grep";
 import { planGitCommand } from "../git-command";
 import { resolveInsideRoot } from "../project-uri";
+import { robustReplace } from "../input-normalize";
 import { ProjectFileTree } from "../file-btree";
 import type { ProjectPolicy } from "../project-policy";
 import type { ChatTool } from "../openai-client";
-
-export const MAX_TOOL_ITERATIONS = 200;
 
 export const TOOL_DEFINITIONS: ChatTool[] = [
   {
@@ -67,6 +66,51 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
   {
     type: "function",
     function: {
+      name: "write_diff",
+      description:
+        "Apply a targeted edit to a file. Pass `path` and either `startLine` (with optional `endLine`) and `replace` (or `content`), or `search` and `replace`.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          path: {
+            type: "string",
+            description: "Project-relative or absolute path to the file.",
+          },
+          startLine: {
+            type: "integer",
+            description: "1-based start line of the range to replace.",
+          },
+          endLine: {
+            type: "integer",
+            description:
+              "1-based end line of the range to replace (defaults to startLine).",
+          },
+          search: {
+            type: "string",
+            description: "Exact text or lines to find and replace in the file.",
+          },
+          replace: {
+            type: "string",
+            description: "New text to replace the specified lines or search text.",
+          },
+          content: {
+            type: "string",
+            description: "Alias for `replace`.",
+          },
+          all: {
+            type: "boolean",
+            description:
+              "If true, replace all occurrences of `search`. Defaults to false.",
+          },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "move_file",
       description:
         "Move a file within the project. Both source and destination must stay inside the project; destination must not already exist.",
@@ -101,20 +145,24 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
         properties: {
           path: {
             type: "string",
-            description: "Directory to search in, relative to project root. Defaults to '.' (root).",
+            description:
+              "Directory to search in, relative to project root. Defaults to '.' (root).",
           },
           pattern: {
             type: "string",
-            description: "DSL search pattern (*, ?, |, &, \\). Applied to file basename.",
+            description:
+              "DSL search pattern (*, ?, |, &, \\). Applied to file basename.",
           },
           extensions: {
             type: "array",
             items: { type: "string" },
-            description: "Optional list of file extensions to filter by (e.g. ['ts', 'js'] or ['.ts', '.js']).",
+            description:
+              "Optional list of file extensions to filter by (e.g. ['ts', 'js'] or ['.ts', '.js']).",
           },
           caseInsensitive: {
             type: "boolean",
-            description: "Case-insensitive matching for pattern and extensions.",
+            description:
+              "Case-insensitive matching for pattern and extensions.",
           },
           maxResults: {
             type: "integer",
@@ -136,11 +184,13 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
         properties: {
           path: {
             type: "string",
-            description: "Directory to get structure for, relative to project root. Defaults to '.' (entire project).",
+            description:
+              "Directory to get structure for, relative to project root. Defaults to '.' (entire project).",
           },
           depth: {
             type: "integer",
-            description: "Maximum depth of folder nesting to display (default 5).",
+            description:
+              "Maximum depth of folder nesting to display (default 5).",
           },
         },
       },
@@ -181,7 +231,8 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
           },
           path: {
             type: "string",
-            description: "Directory or file to search in, relative to project root. Defaults to '.'.",
+            description:
+              "Directory or file to search in, relative to project root. Defaults to '.'.",
           },
           caseInsensitive: { type: "boolean" },
           maxResults: { type: "integer" },
@@ -242,6 +293,19 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "run_build",
+      description:
+        "Run the build command the user configured for this project in Pulsar user config (buildCommand). You cannot choose or change the command.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    },
+  },
 ];
 
 export function toolsForPolicy(policy: ProjectPolicy): ChatTool[] {
@@ -249,6 +313,7 @@ export function toolsForPolicy(policy: ProjectPolicy): ChatTool[] {
     const name = tool.function.name;
     if (name === "run_command") return policy.allowCommands;
     if (name === "run_tests") return !!policy.testCommand;
+    if (name === "run_build") return !!policy.buildCommand;
     return true;
   });
 }
@@ -361,6 +426,17 @@ export function describeToolCall(
         needsPermission: true,
       };
     }
+    case "write_diff": {
+      const filePath = resolveInsideRoot(cwd, stringArg(args, "path") ?? ".");
+      assertWritablePath(cwd, filePath);
+      return {
+        title: `Edit ${path.basename(filePath)}`,
+        kind: "edit",
+        locations: [{ path: filePath }],
+        rawInput: args,
+        needsPermission: true,
+      };
+    }
     case "move_file": {
       const sourcePath = resolveInsideRoot(
         cwd,
@@ -464,6 +540,20 @@ export function describeToolCall(
         needsPermission: false,
       };
     }
+    case "run_build": {
+      const command = policy.buildCommand;
+      if (!command) {
+        throw new Error(
+          "No build command configured. Set buildCommand under pulsar-assistant.projects in Pulsar user config for this folder (not in the project folder).",
+        );
+      }
+      return {
+        title: `Build ${command}`,
+        kind: "execute",
+        rawInput: { command },
+        needsPermission: false,
+      };
+    }
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -511,6 +601,8 @@ export async function executeTool(
       return readFileTool(conn, sessionId, cwd, args);
     case "write_file":
       return writeFileTool(conn, sessionId, cwd, args);
+    case "write_diff":
+      return writeDiffTool(conn, sessionId, cwd, args);
     case "move_file":
       return moveFileTool(conn, sessionId, cwd, args);
     case "find_files":
@@ -527,6 +619,8 @@ export async function executeTool(
       return runCommandTool(cwd, args, signal, policy);
     case "run_tests":
       return runTestsTool(cwd, signal, policy);
+    case "run_build":
+      return runBuildTool(cwd, signal, policy);
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -586,12 +680,9 @@ async function writeFileTool(
       throw new Error("write_file `searchText` must not be empty.");
     }
     const current = oldText ?? "";
-    const parts = current.split(searchText);
-    if (parts.length === 1) {
-      throw new Error(`Search text not found in ${filePath}`);
-    }
-    replacedCount = parts.length - 1;
-    newContent = parts.join(replaceText);
+    const res = robustReplace(current, searchText, replaceText, true);
+    replacedCount = res.count;
+    newContent = res.newContent;
   } else {
     if (fullContent === undefined) {
       throw new Error(
@@ -607,6 +698,75 @@ async function writeFileTool(
       searchText !== undefined
         ? `Replaced ${replacedCount} occurrence${replacedCount === 1 ? "" : "s"} in ${filePath}`
         : `Wrote ${filePath}`,
+    content: [
+      { type: "diff", path: filePath, oldText, newText: newContent },
+    ],
+  };
+}
+
+async function writeDiffTool(
+  conn: BuiltinHost,
+  sessionId: string,
+  cwd: string,
+  args: Record<string, unknown>,
+): Promise<ToolSuccess> {
+  const filePath = resolveInsideRoot(cwd, stringArg(args, "path") ?? ".");
+  assertWritablePath(cwd, filePath);
+
+  let oldText: string | null = null;
+  try {
+    const existing = await conn.readTextFile({ sessionId, path: filePath });
+    oldText = existing.content ?? "";
+  } catch {
+    oldText = "";
+  }
+
+  const replaceText =
+    stringArg(args, "replace") ?? stringArg(args, "content") ?? "";
+  const startLine = intArg(args, "startLine");
+  const endLine = intArg(args, "endLine") ?? startLine;
+  const search = stringArg(args, "search") ?? stringArg(args, "searchText");
+
+  let newContent: string;
+  let summary: string;
+
+  if (startLine !== undefined) {
+    if (startLine < 1) {
+      throw new Error("write_diff `startLine` must be >= 1.");
+    }
+    const safeEndLine =
+      endLine !== undefined ? Math.max(startLine, endLine) : startLine;
+
+    const current = oldText ?? "";
+    const usesCrlf = current.includes("\r\n");
+    const eol = usesCrlf ? "\r\n" : "\n";
+    const lines = current.split(/\r?\n/);
+
+    const before = lines.slice(0, startLine - 1);
+    const after = lines.slice(safeEndLine);
+    const replacementLines =
+      replaceText.length > 0 ? replaceText.split(/\r?\n/) : [];
+
+    const combined = [...before, ...replacementLines, ...after];
+    newContent = combined.join(eol);
+    summary = `Replaced lines ${startLine}-${safeEndLine} in ${filePath}`;
+  } else if (search !== undefined) {
+    if (search.length === 0) {
+      throw new Error("write_diff `search` must not be empty.");
+    }
+    const replaceAll = args.all === true;
+    const res = robustReplace(oldText ?? "", search, replaceText, replaceAll);
+    newContent = res.newContent;
+    summary = `Replaced ${res.count} occurrence${res.count === 1 ? "" : "s"} in ${filePath}`;
+  } else {
+    throw new Error(
+      "write_diff requires either `startLine` (with optional `endLine`) or `search`, along with `replace`.",
+    );
+  }
+
+  await conn.writeTextFile({ sessionId, path: filePath, content: newContent });
+  return {
+    output: summary,
     content: [
       { type: "diff", path: filePath, oldText, newText: newContent },
     ],
@@ -768,6 +928,30 @@ async function runTestsTool(
   const argv = parseCommandLine(commandLine);
   const command = argv[0];
   if (!command) throw new Error("Configured testCommand is empty.");
+  return formatProcessResult(
+    await runCapturedProcess({
+      command,
+      args: argv.slice(1),
+      cwd,
+      signal,
+    }),
+  );
+}
+
+async function runBuildTool(
+  cwd: string,
+  signal: AbortSignal,
+  policy: ProjectPolicy,
+): Promise<ToolSuccess> {
+  const commandLine = policy.buildCommand;
+  if (!commandLine) {
+    throw new Error(
+      "No build command configured. Set buildCommand under pulsar-assistant.projects in Pulsar user config for this folder (not in the project folder).",
+    );
+  }
+  const argv = parseCommandLine(commandLine);
+  const command = argv[0];
+  if (!command) throw new Error("Configured buildCommand is empty.");
   return formatProcessResult(
     await runCapturedProcess({
       command,

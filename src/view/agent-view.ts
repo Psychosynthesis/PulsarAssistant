@@ -9,6 +9,7 @@ import {
 import {
   AgentsConfig,
   LaunchTarget,
+  CursorLaunchTarget,
   OpenaiLaunchTarget,
   groupAgents,
   isLaunchedAgentStale,
@@ -17,14 +18,17 @@ import {
   toLaunchTarget,
 } from "../agent-config";
 import {
-  OpenAiModelInfo,
+
   fetchOpenAiModels,
 } from "../openai-client";
+import { fetchCursorModels } from "../cursorClient";
+import type { ModelInfo } from "./model-info";
 import {
   readAgentsConfig,
   readProjectPolicy,
   setActiveAgentId,
   setProjectMaxTurnRequests,
+  setProjectBuildCommand,
   setProjectTestCommand,
   setProjectToolCallDelay,
 } from "./config-store";
@@ -40,7 +44,7 @@ import { ComposerStatusBar } from "./components/composer-status-bar";
 import { PlanBarView } from "./components/plan-bar-view";
 import { ToolCallManager, ToolUpdate } from "./components/tool-call-view";
 import { PermissionManager } from "./components/permission-view";
-import { TestCommandModal } from "./components/test-command-modal";
+import { TestCommandModal, BuildCommandModal } from "./components/test-command-modal";
 import type { AgentStatusReporter } from "./status-indicator";
 import { estimateSessionTokens, resolveContextWindow } from "../token-estimate";
 import { fileUri } from "../util";
@@ -189,7 +193,7 @@ export class PulsarAssistantView {
   private agentsConfig: AgentsConfig;
   private selectedAgentId: string | null = null;
   private selectedModelId: string | null = null;
-  private modelList: OpenAiModelInfo[] | null = null;
+  private modelList: ModelInfo[] | null = null;
   private modelsLoading = false;
   private modelWarning = false;
   private modelFetchController: AbortController | null = null;
@@ -329,7 +333,7 @@ export class PulsarAssistantView {
     this.renderLiveRow();
     this.refreshTurnLimitInput();
     this.refreshToolDelayInput();
-    this.handleAgentsConfigChange();
+
     this.ensureStarted();
   }
 
@@ -339,10 +343,6 @@ export class PulsarAssistantView {
 
   focusComposer(): void {
     this.input.focus();
-  }
-
-  refreshAfterMigration(): void {
-    this.handleAgentsConfigChange();
   }
 
   getTitle(): string {
@@ -388,8 +388,9 @@ export class PulsarAssistantView {
             this.activeTarget = toLaunchTarget(
               liveTarget.id,
               agent,
-              process.env,
-              liveTarget.kind === "openai" ? liveTarget.model : undefined,
+              liveTarget.kind === "openai" || liveTarget.kind === "cursor"
+                ? liveTarget.model
+                : undefined,
             );
           } catch {
             this.activeTarget = liveTarget;
@@ -405,11 +406,14 @@ export class PulsarAssistantView {
         ? toLaunchTarget(resolved.id!, resolved.agent)
         : null;
     }
-    if (this.activeTarget?.kind === "openai") {
+    if (
+      this.activeTarget?.kind === "openai" ||
+      this.activeTarget?.kind === "cursor"
+    ) {
       this.selectedModelId = this.activeTarget.model;
       if (
         !previousTarget ||
-        previousTarget.kind !== "openai" ||
+        (previousTarget.kind !== "openai" && previousTarget.kind !== "cursor") ||
         previousTarget.id !== this.activeTarget.id ||
         previousTarget.baseUrl !== this.activeTarget.baseUrl ||
         previousTarget.apiKey !== this.activeTarget.apiKey
@@ -450,7 +454,9 @@ export class PulsarAssistantView {
   private currentModelId(): string | null {
     if (this.selectedModelId) return this.selectedModelId;
     const target = this.activeTarget;
-    if (target && target.kind === "openai") return target.model;
+    if (target && (target.kind === "openai" || target.kind === "cursor")) {
+      return target.model;
+    }
     return null;
   }
 
@@ -464,16 +470,28 @@ export class PulsarAssistantView {
   private modelSelectorDisabled(): boolean {
     return (
       !this.activeTarget ||
-      this.activeTarget.kind !== "openai" ||
+      (this.activeTarget.kind !== "openai" && this.activeTarget.kind !== "cursor") ||
       this.modelsLoading ||
+      (this.activeTarget.kind === "cursor" && !this.session.canSetModel()) ||
       this.session.switching ||
       this.session.running
     );
   }
 
+  private modelSelectorDisabledReason(): string | null {
+    if (
+      this.activeTarget?.kind === "cursor" &&
+      this.session.sessionId &&
+      !this.session.canSetModel()
+    ) {
+      return "Cursor model is fixed for this session.\nCreate a new session to use another model.";
+    }
+    return null;
+  }
+
   private renderModelSelector(): void {
     const target = this.activeTarget;
-    if (!target || target.kind !== "openai") {
+    if (!target || (target.kind !== "openai" && target.kind !== "cursor")) {
       this.modelSelectorWrap.style.display = "none";
       this.modelSelector.render(null, null, false);
       return;
@@ -489,13 +507,13 @@ export class PulsarAssistantView {
   private selectModel(id: string): void {
     if (this.modelSelectorDisabled()) return;
     const target = this.activeTarget;
-    if (!target || target.kind !== "openai") return;
+    if (!target || (target.kind !== "openai" && target.kind !== "cursor")) return;
     if (target.model === id) return;
     const agent = this.agentsConfig.agents[target.id];
     if (!agent) return;
     let next: LaunchTarget;
     try {
-      next = toLaunchTarget(target.id, agent, process.env, id);
+      next = toLaunchTarget(target.id, agent, id);
     } catch (error) {
       this.appendError(error instanceof Error ? error.message : String(error));
       return;
@@ -513,7 +531,7 @@ export class PulsarAssistantView {
   }
 
   private async fetchModelsForTarget(
-    target: OpenaiLaunchTarget,
+    target: OpenaiLaunchTarget | CursorLaunchTarget,
   ): Promise<void> {
     this.modelFetchController?.abort();
     const controller = new AbortController();
@@ -524,12 +542,11 @@ export class PulsarAssistantView {
     this.modelWarning = false;
     this.renderModelSelector();
     try {
-      const models = await fetchOpenAiModels({
-        baseUrl: target.baseUrl,
-        apiKey: target.apiKey,
-        modelsUrl: target.modelsUrl,
-        signal: controller.signal,
-      });
+      const models = await this.requestModels(target, controller.signal);
+
+
+
+
       if (generation !== this.modelFetchGeneration || controller.signal.aborted) {
         return;
       }
@@ -550,6 +567,25 @@ export class PulsarAssistantView {
       this.renderModelSelector();
       this.setAgentStatus("warning");
     }
+  }
+
+  private async requestModels(
+    target: OpenaiLaunchTarget | CursorLaunchTarget,
+    signal: AbortSignal,
+  ): Promise<ModelInfo[]> {
+    if (target.kind === "openai") {
+      return fetchOpenAiModels({
+        baseUrl: target.baseUrl,
+        apiKey: target.apiKey,
+        modelsUrl: target.modelsUrl,
+        signal,
+      });
+    }
+    return fetchCursorModels({
+      baseUrl: target.baseUrl,
+      apiKey: target.apiKey,
+      signal,
+    });
   }
 
   private renderNoAgentIdle(): void {
@@ -668,6 +704,7 @@ export class PulsarAssistantView {
     this.modelSelector = new ModelSelector(
       (id) => this.selectModel(id),
       () => this.modelSelectorDisabled(),
+      () => this.modelSelectorDisabledReason(),
       () => {
         this.closeAgentMenu();
         this.closeSettingsMenu();
@@ -799,6 +836,9 @@ export class PulsarAssistantView {
       });
       this.settingsMenu.appendChild(item);
     };
+    addSettingsItem("Set build command\u2026", () =>
+      this.openBuildCommandModal(),
+    );
     addSettingsItem("Set test command\u2026", () =>
       this.openTestCommandModal(),
     );
@@ -1845,13 +1885,14 @@ export class PulsarAssistantView {
 
   private performSwitch(target: LaunchTarget): void {
     this.selectedAgentId = target.id;
-    this.selectedModelId = target.kind === "openai" ? target.model : null;
+    this.selectedModelId =
+      target.kind === "openai" || target.kind === "cursor" ? target.model : null;
     if (readAgentsConfig().activeAgentId !== target.id) {
       this.setActiveAgentId(target.id);
     }
     this.resetSessionForRelaunch();
     this.activeTarget = target;
-    if (target.kind === "openai") {
+    if (target.kind === "openai" || target.kind === "cursor") {
       void this.fetchModelsForTarget(target);
     } else {
       this.modelList = null;
@@ -1907,7 +1948,12 @@ export class PulsarAssistantView {
     for (const group of groups) {
       const header = document.createElement("div");
       header.classList.add("pulsar-assistant-picker-group");
-      header.textContent = group.type === "openai" ? "API" : "ACP";
+      header.textContent =
+        group.type === "openai"
+          ? "API"
+          : group.type === "cursor"
+            ? "Cursor"
+            : "ACP";
       this.agentMenu.appendChild(header);
       for (const [id, agent] of group.entries) {
         const item = document.createElement("button");
@@ -1996,6 +2042,17 @@ export class PulsarAssistantView {
     this.settingsMenu.style.display = "none";
     this.settingsMenuOpen = false;
     this.settingsButton.setAttribute("aria-expanded", "false");
+  }
+
+  private openBuildCommandModal(): void {
+    const policy = readProjectPolicy(this.projectRoot);
+    BuildCommandModal.show({
+      projectRoot: this.projectRoot,
+      currentCommand: policy.buildCommand,
+      onSave: (command) => {
+        setProjectBuildCommand(this.projectRoot, command);
+      },
+    });
   }
 
   private openTestCommandModal(): void {
@@ -2118,6 +2175,10 @@ export class PulsarAssistantView {
       if (cached !== undefined) this.swapInConversation(cached);
       this.planBarView.syncSession(id);
       this.session.activateCachedSession(id);
+      if (this.session.currentModel && this.activeTarget && "model" in this.activeTarget) {
+        this.activeTarget = { ...this.activeTarget, model: this.session.currentModel };
+      }
+      this.renderModelSelector();
       this.restoreLiveState(id);
       this.permissionManager.setAutoApprove(false);
       this.autoApprovePermissions = false;
@@ -2143,6 +2204,10 @@ export class PulsarAssistantView {
       .then(() => {
         this.hideLoadingOverlay();
         this.restoreLiveState(id);
+        if (this.session.currentModel && this.activeTarget && "model" in this.activeTarget) {
+          this.activeTarget = { ...this.activeTarget, model: this.session.currentModel };
+        }
+        this.renderModelSelector();
         this.planBarView.syncSession(id);
         this.input.focus();
         this.updateContextProgress();
@@ -2255,11 +2320,13 @@ export class PulsarAssistantView {
         this.setAgentStatus(this.modelWarning ? "warning" : "ready");
         this.agentExited = false;
         this.setLifecycleStatus("");
+        if (this.session.currentModel && this.activeTarget && "model" in this.activeTarget) {
+          this.activeTarget = { ...this.activeTarget, model: this.session.currentModel };
+        }
         this.renderSessionControls();
         this.renderConfigSelectors();
         this.renderModelSelector();
         this.updateContextProgress();
-      this.updateInputControls();
         this.updateInputControls();
         break;
       case "turn-start":
@@ -2279,13 +2346,13 @@ export class PulsarAssistantView {
         this.updateInputControls();
         this.updateSessionControls();
         this.endStreamingBlocks();
+        this.renderModelSelector();
         this.planBarView.snapshotCompletedPlan();
         if (event.stopReason && event.stopReason !== "end_turn") {
           this.appendNote(`Turn stopped: ${event.stopReason}`);
         }
         this.session.refreshSessionList();
         this.updateContextProgress();
-      this.updateInputControls();
         this.statusBar.clear();
         break;
       case "update":
@@ -2898,7 +2965,8 @@ export class PulsarAssistantView {
   private renderSessionControls(): void {
     const canList = this.session.canListSessions();
     this.sessionsToggle.style.display = canList ? "" : "none";
-    this.compactButton.style.display = this.session.sessionId ? "" : "none";
+    this.compactButton.style.display =
+      this.session.sessionId && this.session.canCompactContext() ? "" : "none";
     this.newSessionButton.style.display = "";
     if (canList) this.session.refreshSessionList();
   }

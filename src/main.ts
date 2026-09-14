@@ -1,7 +1,7 @@
 import { CommandEvent, CompositeDisposable, Disposable, TextEditor } from "atom";
 import type { StatusBar } from "atom/status-bar";
 import { PulsarAssistantView } from "./view/agent-view";
-import { migrateAgentsConfigStore } from "./view/config-store";
+import { initModelContextWindows } from "./view/config-store";
 import { ProjectsStorageModal } from "./view/projects-storage-modal";
 import { StatusIndicator } from "./view/status-indicator";
 import { attachTrafficSummary } from "./view/traffic-summary";
@@ -143,8 +143,8 @@ function editorHasSelection(): boolean {
 }
 
 export function activate(): void {
-  migrateAgentsConfigStore();
-  for (const view of views) view.refreshAfterMigration();
+  initModelContextWindows();
+
 
   subscriptions = new CompositeDisposable();
   subscriptions.add(

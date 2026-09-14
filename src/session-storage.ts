@@ -10,7 +10,7 @@ export interface StoredToolCallMetadata {
   rawInput?: unknown;
   rawOutput?: unknown;
   locations?: Array<{ path: string; line?: number | null }>;
-  status?: "completed" | "failed" | "pending";
+  status?: "completed" | "failed" | "pending" | "in_progress";
   error?: string;
   isSummary?: boolean;
   [key: string]: unknown;
@@ -36,6 +36,7 @@ export interface StoredSession {
   createdAt: number;
   updatedAt: number;
   messages: StoredContextMessage[];
+  providerState?: Record<string, unknown>;
 }
 
 export interface StoredSessionSummary {
@@ -46,6 +47,7 @@ export interface StoredSessionSummary {
   model: string;
   createdAt: number;
   updatedAt: number;
+  providerState?: Record<string, unknown>;
   messageCount: number;
 }
 
@@ -173,6 +175,7 @@ export async function listSessions(
           model: session.model,
           createdAt: session.createdAt,
           updatedAt: session.updatedAt,
+          providerState: session.providerState,
           messageCount: session.messages.length,
         });
       }
@@ -219,6 +222,13 @@ export async function deleteMessage(
   await saveSession(projectStorageDir, session);
   return true;
 }
+
+export {
+  deleteSession as deleteStoredSession,
+  listSessions as listStoredSessions,
+  loadSession as loadStoredSession,
+  saveSession as saveStoredSession,
+};
 
 export async function clearSessionMessages(
   projectStorageDir: string,

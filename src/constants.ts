@@ -6,6 +6,8 @@ export const PROTOCOL_VERSION = acp.PROTOCOL_VERSION;
 export const STARTUP_TIMEOUT_MS = 30_000;
 export const AUTH_REQUIRED_CODE = -32000;
 
+export const MAX_TOOL_ITERATIONS = 200; // This is default
+
 export const HOST_CONTEXT_START = "<pulsar-assistant-host-context>";
 export const HOST_CONTEXT_END = "</pulsar-assistant-host-context>";
 

@@ -9,6 +9,7 @@ export const CFG_PROJECTS = "pulsar-assistant.projects";
 export type ProjectPolicy = {
   allowCommands: boolean;
   testCommand: string | null;
+  buildCommand: string | null;
   maxTurnRequests: number | null;
   toolCallDelayMs: number | null;
 };
@@ -16,6 +17,7 @@ export type ProjectPolicy = {
 const DENY: ProjectPolicy = {
   allowCommands: false,
   testCommand: null,
+  buildCommand: null,
   maxTurnRequests: null,
   toolCallDelayMs: null,
 };
@@ -53,6 +55,7 @@ export function resolveProjectPolicy(
     return {
       allowCommands: value.allowCommands === true,
       testCommand: optionalString(value.testCommand) ?? null,
+      buildCommand: optionalString(value.buildCommand) ?? null,
       maxTurnRequests: positiveInt(value.maxTurnRequests),
       toolCallDelayMs: positiveInt(value.toolCallDelayMs),
     };

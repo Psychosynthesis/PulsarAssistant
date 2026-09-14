@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { resolveInsideRoot } from "./project-uri";
+import { normalizeInputPath } from "./input-normalize";
 import {
   buildIgnoredDirsSet,
   getConfiguredIgnoredDirs,
@@ -162,8 +163,11 @@ export function makeExtensionsMatcher(
 }
 
 function looksBinary(buffer: Buffer): boolean {
-  const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
-  return sample.includes(0);
+  const check = buffer.subarray(0, 1024);
+  for (let i = 0; i < check.length; i++) {
+    if (check[i] === 0) return true;
+  }
+  return false;
 }
 
 async function walkFiles(
@@ -203,7 +207,8 @@ async function walkFiles(
 
 export async function findFiles(options: FindFilesOptions): Promise<string[]> {
   const cwd = path.resolve(options.cwd);
-  const searchRoot = resolveInsideRoot(cwd, options.searchPath ?? ".");
+  const normalizedSearch = normalizeInputPath(options.searchPath ?? ".");
+  const searchRoot = resolveInsideRoot(cwd, normalizedSearch || ".");
   const skipDirs = options.skipDirs ?? getConfiguredIgnoredDirs();
   const maxResults = Math.max(
     1,
@@ -228,7 +233,9 @@ export async function findFiles(options: FindFilesOptions): Promise<string[]> {
         if (matches.length >= maxResults) break;
       }
     }
-    return matches;
+    if (all.length > 0 || matches.length > 0) {
+      return matches;
+    }
   }
 
   await walkFiles(searchRoot, skipDirs, async (absolutePath) => {
@@ -242,7 +249,8 @@ export async function findFiles(options: FindFilesOptions): Promise<string[]> {
 
 export async function grepFiles(options: GrepOptions): Promise<GrepMatch[]> {
   const cwd = path.resolve(options.cwd);
-  const searchRoot = resolveInsideRoot(cwd, options.searchPath ?? ".");
+  const normalizedSearch = normalizeInputPath(options.searchPath ?? ".");
+  const searchRoot = resolveInsideRoot(cwd, normalizedSearch || ".");
   const skipDirs = options.skipDirs ?? getConfiguredIgnoredDirs();
   const maxResults = Math.max(
     1,
@@ -310,7 +318,9 @@ export async function grepFiles(options: GrepOptions): Promise<GrepMatch[]> {
       const keep = await searchSingleFile(abs);
       if (keep === false) break;
     }
-    return matches;
+    if (all.length > 0 || matches.length > 0) {
+      return matches;
+    }
   }
 
   await walkFiles(searchRoot, skipDirs, async (absolutePath) => {

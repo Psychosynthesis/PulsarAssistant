@@ -8,6 +8,7 @@ test("resolveProjectPolicy: denies when projects is missing", () => {
   assert.deepEqual(resolveProjectPolicy(root, undefined), {
     allowCommands: false,
     testCommand: null,
+    buildCommand: null,
     maxTurnRequests: null,
     toolCallDelayMs: null,
   });
@@ -16,12 +17,22 @@ test("resolveProjectPolicy: denies when projects is missing", () => {
 test("resolveProjectPolicy: matches a configured project root", () => {
   const root = path.resolve("/tmp/app");
   const policy = resolveProjectPolicy(root, {
-    [root]: { allowCommands: true, testCommand: "npm test" },
+    [root]: { allowCommands: true, testCommand: "npm test", buildCommand: "npm run build" },
   });
   assert.equal(policy.allowCommands, true);
   assert.equal(policy.testCommand, "npm test");
+  assert.equal(policy.buildCommand, "npm run build");
   assert.equal(policy.maxTurnRequests, null);
   assert.equal(policy.toolCallDelayMs, null);
+});
+
+test("resolveProjectPolicy: reads buildCommand", () => {
+  const root = path.resolve("/tmp/app");
+  const policy = resolveProjectPolicy(root, {
+    [root]: { buildCommand: "cargo build" },
+  });
+  assert.equal(policy.buildCommand, "cargo build");
+  assert.equal(policy.testCommand, null);
 });
 
 test("resolveProjectPolicy: reads a positive maxTurnRequests", () => {
@@ -63,10 +74,11 @@ test("resolveProjectPolicy: ignores invalid toolCallDelayMs", () => {
 test("resolveProjectPolicy: ignore allowCommands unless it is boolean true", () => {
   const root = path.resolve("/tmp/app");
   const policy = resolveProjectPolicy(root, {
-    [root]: { allowCommands: "true", testCommand: "  " },
+    [root]: { allowCommands: "true", testCommand: "  ", buildCommand: "  " },
   });
   assert.equal(policy.allowCommands, false);
   assert.equal(policy.testCommand, null);
+  assert.equal(policy.buildCommand, null);
 });
 
 test("resolveProjectPolicy: does not match a sibling folder", () => {
@@ -75,10 +87,12 @@ test("resolveProjectPolicy: does not match a sibling folder", () => {
     [path.resolve("/tmp/other")]: {
       allowCommands: true,
       testCommand: "pytest",
+      buildCommand: "make",
     },
   });
   assert.equal(policy.allowCommands, false);
   assert.equal(policy.testCommand, null);
+  assert.equal(policy.buildCommand, null);
   assert.equal(policy.maxTurnRequests, null);
   assert.equal(policy.toolCallDelayMs, null);
 });
@@ -86,8 +100,9 @@ test("resolveProjectPolicy: does not match a sibling folder", () => {
 test("resolveProjectPolicy: matches equivalent path forms", () => {
   const root = path.resolve("/tmp/app");
   const policy = resolveProjectPolicy(`${root}${path.sep}`, {
-    [path.join(root, ".")]: { allowCommands: true, testCommand: "go test" },
+    [path.join(root, ".")]: { allowCommands: true, testCommand: "go test", buildCommand: "go build" },
   });
   assert.equal(policy.allowCommands, true);
   assert.equal(policy.testCommand, "go test");
+  assert.equal(policy.buildCommand, "go build");
 });

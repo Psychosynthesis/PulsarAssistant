@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { resolveSafeProjectPath } from "./input-normalize";
 
 export const PULSAR_ACP_AGENT_URI_PREFIX = "atom://pulsar-assistant/project/";
 
@@ -64,22 +65,22 @@ function resolveRealPath(filePath: string): string {
 }
 
 export function resolveInsideRoot(cwd: string, requested: string): string {
+  const target = resolveSafeProjectPath(cwd, requested);
   const root = path.resolve(cwd);
-  const target = path.isAbsolute(requested)
-    ? path.resolve(requested)
-    : path.resolve(root, requested);
-
-  const rel = path.relative(root, target);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error(`Path is outside the project: ${requested}`);
-  }
 
   // Follow symlinks before accepting the path. A symlink inside the project can
   // point outside it; `path.relative` above would still see the lexical path.
   const realRoot = resolveRealPath(root);
   const realTarget = resolveRealPath(target);
-  const realRel = path.relative(realRoot, realTarget);
-  if (realRel.startsWith("..") || path.isAbsolute(realRel)) {
+  const isWindows = process.platform === "win32";
+  const realRel = path.relative(
+    isWindows ? realRoot.toLowerCase() : realRoot,
+    isWindows ? realTarget.toLowerCase() : realTarget,
+  );
+  if (
+    realRel.startsWith("..") ||
+    (isWindows ? /^[a-zA-Z]:/.test(realRel) : path.isAbsolute(realRel))
+  ) {
     throw new Error(`Path is outside the project: ${requested}`);
   }
 

@@ -1,4 +1,3 @@
-import * as fs from "fs";
 import * as path from "path";
 import {
   DEFAULT_PROJECT_SKIP_DIRS,
@@ -17,17 +16,27 @@ export class ProjectFileTreeManager {
   private pendingFileTreeUpdates = new Set<string>();
   private fileTreeBatchTimer: NodeJS.Timeout | null = null;
   private fileTreeSaveTimer: NodeJS.Timeout | null = null;
+  private initPromise: Promise<void>;
 
   constructor(
     private readonly projectRoot: string,
     private readonly editor: EditorBackend,
   ) {
     this.fileTree = new ProjectFileTree(this.projectRoot);
-    void this.initFileTree();
+    this.initPromise = this.initFileTree();
     this.subscribeToFileEvents();
   }
 
   getFileTree(): ProjectFileTree {
+    return this.fileTree;
+  }
+
+  async ensureInitialized(): Promise<ProjectFileTree> {
+    try {
+      await this.initPromise;
+    } catch {
+      // ignore
+    }
     return this.fileTree;
   }
 
@@ -42,21 +51,31 @@ export class ProjectFileTreeManager {
 
   private async initFileTree(): Promise<void> {
     const treePath = this.treeFilePath();
+    let loaded: ProjectFileTree | null = null;
     try {
-      const loaded = await ProjectFileTree.loadFromFile(treePath);
-      if (loaded) {
+      loaded = await ProjectFileTree.loadFromFile(treePath);
+      if (loaded && loaded.size > 0) {
         this.fileTree = loaded;
-        return;
       }
     } catch (err) {
       console.warn("[pulsar-assistant] failed to load tree.json, rescanning", err);
     }
 
-    try {
-      await this.fileTree.scanProject();
-      await this.fileTree.saveToFile(treePath);
-    } catch (err) {
-      console.warn("[pulsar-assistant] background file tree scan failed", err);
+    if (!loaded || this.fileTree.size === 0) {
+      try {
+        await this.fileTree.scanProject();
+        await this.fileTree.saveToFile(treePath);
+      } catch (err) {
+        console.warn("[pulsar-assistant] background file tree scan failed", err);
+      }
+    } else {
+      // If loaded from disk, schedule a background rescan to catch any outside changes
+      setTimeout(() => {
+        void this.fileTree
+          .scanProject()
+          .then(() => this.fileTree.saveToFile(treePath))
+          .catch(() => {});
+      }, 1500);
     }
   }
 
@@ -119,54 +138,34 @@ export class ProjectFileTreeManager {
   }
 
   private async processBatchTreeUpdates(): Promise<void> {
-    if (this.pendingFileTreeUpdates.size === 0) return;
-    const pathsToProcess = Array.from(this.pendingFileTreeUpdates);
+    const updates = Array.from(this.pendingFileTreeUpdates);
     this.pendingFileTreeUpdates.clear();
 
-    for (const p of pathsToProcess) {
-      try {
-        await this.fileTree.updatePath(p);
-      } catch {
-        // Ignore single path update failure
-      }
-    }
-
-    this.scheduleTreeSave();
-  }
-
-  async notifyPathModified(filePath: string): Promise<void> {
-    try {
+    for (const filePath of updates) {
       await this.fileTree.updatePath(filePath);
-    } catch {
-      // Ignore update error
     }
+
     this.scheduleTreeSave();
   }
 
-  scheduleTreeSave(): void {
+  private scheduleTreeSave(): void {
     if (this.fileTreeSaveTimer) {
       clearTimeout(this.fileTreeSaveTimer);
     }
     this.fileTreeSaveTimer = setTimeout(() => {
       this.fileTreeSaveTimer = null;
-      void this.saveTreeToDisk();
-    }, 2500);
+      void this.fileTree.saveToFile(this.treeFilePath());
+    }, 5000);
   }
 
-  private async saveTreeToDisk(): Promise<void> {
-    const treePath = this.treeFilePath();
-    try {
-      await this.fileTree.saveToFile(treePath);
-    } catch (err) {
-      console.warn("[pulsar-assistant] failed to save tree.json", err);
-    }
+  async notifyPathModified(filePath: string): Promise<void> {
+    await this.fileTree.updatePath(filePath);
+    this.scheduleTreeSave();
   }
 
   dispose(): void {
     if (this.fileTreeSubscription) {
-      try {
-        this.fileTreeSubscription.dispose();
-      } catch {}
+      this.fileTreeSubscription.dispose();
       this.fileTreeSubscription = null;
     }
     if (this.fileTreeBatchTimer) {
@@ -177,25 +176,5 @@ export class ProjectFileTreeManager {
       clearTimeout(this.fileTreeSaveTimer);
       this.fileTreeSaveTimer = null;
     }
-    if (this.pendingFileTreeUpdates.size > 0) {
-      for (const p of this.pendingFileTreeUpdates) {
-        try {
-          const fullPath = path.isAbsolute(p) ? p : path.join(this.projectRoot, p);
-          const stat = fs.statSync(fullPath);
-          const rel = toPosixPath(path.relative(this.projectRoot, fullPath));
-          this.fileTree.set(rel, {
-            path: rel,
-            size: stat.size,
-            mtime: stat.mtimeMs,
-            isDirectory: stat.isDirectory(),
-          });
-        } catch {
-          const rel = toPosixPath(path.relative(this.projectRoot, p));
-          this.fileTree.remove(rel);
-        }
-      }
-      this.pendingFileTreeUpdates.clear();
-    }
-    void this.saveTreeToDisk();
   }
 }

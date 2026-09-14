@@ -28,6 +28,7 @@ export interface AgentBackend {
   canListSessions(): boolean;
   canLoadSession(): boolean;
   canDeleteSession(): boolean;
+  canSetModel(): boolean;
   isSessionLoaded(id: string): boolean;
 
   currentSessionConfigOptions(): acp.SessionConfigOption[] | null;

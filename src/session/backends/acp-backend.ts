@@ -1,6 +1,5 @@
 import { ChildProcess } from "child_process";
 import spawn from "cross-spawn";
-import * as path from "path";
 import { Readable, Writable } from "stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { LaunchTarget } from "../../agent-config";
@@ -21,7 +20,7 @@ import {
   HOST_CONTEXT_TEXT,
   PROTOCOL_VERSION,
   STARTUP_TIMEOUT_MS,
-} from "../constants";
+} from "../../constants";
 import type { AgentBackend, BackendInitResult } from "./backend";
 
 function terminalAuthCommand(raw: unknown): string | null {
@@ -74,6 +73,10 @@ export class AcpCliBackend implements AgentBackend {
 
   supportsEmbeddedContext(): boolean {
     return this.promptCapabilities?.embeddedContext === true;
+  }
+
+  canSetModel(): boolean {
+    return false;
   }
 
   canListSessions(): boolean {

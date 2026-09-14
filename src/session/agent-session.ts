@@ -13,6 +13,7 @@ import {
   AgentBackend,
   AcpCliBackend,
   BuiltinBackend,
+  CursorBackend,
 } from "./backends";
 import {
   AgentEvent,
@@ -84,11 +85,33 @@ export class AgentSession {
     return this.launchTarget;
   }
 
+  get currentModel(): string | null {
+    if (this.launchTarget && "model" in this.launchTarget) {
+      return (this.launchTarget as any).model ?? null;
+    }
+    return null;
+  }
+
+  canSetModel(): boolean {
+    return this.backend?.canSetModel() ?? true;
+  }
+
+  canCompactContext(): boolean {
+    return this.backend?.compactContext != null;
+  }
+
   setModel(model: string): void {
-    if (this.launchTarget && this.launchTarget.kind === "openai") {
+    if (this.backend && !this.backend.canSetModel()) return;
+    if (
+      this.launchTarget &&
+      (this.launchTarget.kind === "openai" || this.launchTarget.kind === "cursor")
+    ) {
       this.launchTarget = { ...this.launchTarget, model };
     }
-    if (this.startedTarget && this.startedTarget.kind === "openai") {
+    if (
+      this.startedTarget &&
+      (this.startedTarget.kind === "openai" || this.startedTarget.kind === "cursor")
+    ) {
       this.startedTarget = { ...this.startedTarget, model };
     }
     if (this.backend) {
@@ -134,6 +157,13 @@ export class AgentSession {
         this.fileTreeManager,
         (event: AgentEvent) => this.emit(event),
       );
+    } else if (target.kind === "cursor") {
+      this.backend = new CursorBackend(
+        target,
+        this.projectRoot,
+        this.fileTreeManager.getStorageDir(),
+        (event: AgentEvent) => this.emit(event),
+      );
     } else {
       this.backend = new AcpCliBackend(
         target,
@@ -145,7 +175,13 @@ export class AgentSession {
       );
     }
 
+    if (!this.backend) throw new Error("Backend failed to initialize.");
+    await this.fileTreeManager.ensureInitialized();
     await this.backend.start(cwd);
+    const backendTarget = (this.backend as any).target;
+    if (backendTarget?.model) {
+      this.setModel(backendTarget.model);
+    }
     this.starting = null;
 
     this.emit({
@@ -334,6 +370,10 @@ export class AgentSession {
   activateCachedSession(id: string): void {
     if (!this.backend) return;
     this.backend.activateCachedSession(id);
+    const backendTarget = (this.backend as any).target;
+    if (backendTarget?.model) {
+      this.setModel(backendTarget.model);
+    }
     this.emit({ type: "ready", source: "load" });
     this.refreshSessionList();
   }
@@ -355,6 +395,10 @@ export class AgentSession {
         cwd ?? (await this.editor.resolveSessionCwd(this.projectRoot));
       await this.assertSessionCwdAllowed(scopedCwd, "load");
       await this.backend.loadSession(id, scopedCwd);
+      const backendTarget = (this.backend as any).target;
+      if (backendTarget?.model) {
+        this.setModel(backendTarget.model);
+      }
       this.switching = false;
       this.emit({ type: "ready", source: "load" });
       this.refreshSessionList();

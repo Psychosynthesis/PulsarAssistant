@@ -6,7 +6,7 @@ import { CFG_PROJECTS, resolveProjectPolicy } from "../../project-policy";
 import type { EditorBackend } from "../../editor";
 import type { ProjectFileTreeManager } from "../file-tree-manager";
 import type { AgentEvent } from "../types";
-import { CLIENT_INFO, PROTOCOL_VERSION } from "../constants";
+import { CLIENT_INFO, PROTOCOL_VERSION } from "../../constants";
 import type { AgentBackend, BackendInitResult } from "./backend";
 import type { StoredContextMessage } from "../../session-storage";
 
@@ -65,6 +65,9 @@ export class BuiltinBackend implements AgentBackend {
       this.sessionCwd = latest.projectRoot;
       this.loadedSessionIds.add(latest.id);
       await builtin.loadSession(latest.id);
+      if (builtin.activeTarget?.model) {
+        this.target = { ...this.target, model: builtin.activeTarget.model };
+      }
       sessionId = latest.id;
     } else {
       const session = await builtin.newSession({ cwd, mcpServers: [] });
@@ -104,6 +107,10 @@ export class BuiltinBackend implements AgentBackend {
     return true;
   }
 
+  canSetModel(): boolean {
+    return true;
+  }
+
   canDeleteSession(): boolean {
     return true;
   }
@@ -114,6 +121,9 @@ export class BuiltinBackend implements AgentBackend {
 
   activateCachedSession(id: string): void {
     this.sessionId = id;
+    if (this.builtin?.activeTarget?.model) {
+      this.target = { ...this.target, model: this.builtin.activeTarget.model };
+    }
   }
 
   currentSessionConfigOptions(): acp.SessionConfigOption[] | null {
@@ -161,6 +171,9 @@ export class BuiltinBackend implements AgentBackend {
     }
     this.sessionId = id;
     await this.builtin.loadSession(id);
+    if (this.builtin.activeTarget?.model) {
+      this.target = { ...this.target, model: this.builtin.activeTarget.model };
+    }
     this.sessionCwd = cwd;
     this.loadedSessionIds.add(id);
   }
@@ -197,98 +210,76 @@ export class BuiltinBackend implements AgentBackend {
     return this.builtin.getSessionMessages(this.sessionId);
   }
 
-  async compactContext(): Promise<{ compactedCount: number }> {
-    if (!this.builtin || !this.sessionId) return { compactedCount: 0 };
-    return this.builtin.compactContext(this.sessionId);
+  async compactContext(
+    sessionId?: string,
+  ): Promise<{ compactedCount: number }> {
+    const id = sessionId ?? this.sessionId;
+    if (!this.builtin || !id) return { compactedCount: 0 };
+    return this.builtin.compactContext(id);
   }
 
-  private cancelPendingPermissions(): void {
-    if (this.permissionResolvers.size === 0) return;
-    for (const resolve of this.permissionResolvers) {
-      resolve({ outcome: { outcome: "cancelled" } });
-    }
-    this.permissionResolvers.clear();
-    this.emit({ type: "permissions-cancelled" });
-  }
-
-  private assertSessionId(sessionId: acp.SessionId): void {
-    if (this.sessionId === sessionId) return;
-    throw new acp.RequestError(
-      -32002,
-      `Rejecting request for unknown ACP session: ${sessionId}`,
-    );
-  }
-
-  private async assertProjectPath(
-    filePath: string,
-    forWrite: boolean,
-  ): Promise<void> {
-    const roots = await this.editor.allowedRealRoots(
-      this.sessionCwd ?? this.projectRoot,
-    );
-    await this.editor.assertProjectPath(filePath, roots, forWrite);
+  dispose(): void {
+    this.cancelPendingPermissions();
+    this.builtin = null;
+    this.sessionId = null;
+    this.sessionCwd = null;
+    this.loadedSessionIds.clear();
   }
 
   private builtinHost(): BuiltinHost {
     return {
       sessionUpdate: async (params) => {
-        if (params.sessionId !== this.sessionId) return;
         this.emit({
           type: "update",
-          sessionId: params.sessionId,
+          sessionId: (this.sessionId ?? "") as acp.SessionId,
           update: params.update,
         });
       },
-      requestPermission: (params) => {
-        this.assertSessionId(params.sessionId);
-        return new Promise((resolve) => {
-          const respond = (outcome: acp.RequestPermissionResponse) => {
-            this.permissionResolvers.delete(respond);
-            resolve(outcome);
-          };
-          this.permissionResolvers.add(respond);
-          this.emit({ type: "permission", params, respond });
+      requestPermission: async (params) => {
+        return new Promise<acp.RequestPermissionResponse>((resolve) => {
+          this.permissionResolvers.add(resolve);
+          this.emit({
+            type: "permission",
+            params,
+            respond: (outcome: acp.RequestPermissionResponse) => {
+              this.permissionResolvers.delete(resolve);
+              resolve(outcome);
+            },
+          });
         });
       },
       readTextFile: async (params) => {
-        this.assertSessionId(params.sessionId);
-        await this.assertProjectPath(params.path, false);
         return this.editor.readTextFile(params.path, {
           line: params.line,
           limit: params.limit,
         });
       },
       writeTextFile: async (params) => {
-        this.assertSessionId(params.sessionId);
-        await this.assertProjectPath(params.path, true);
         await this.editor.writeTextFile(params.path, params.content);
-        await this.fileTreeManager.notifyPathModified(params.path);
+        await this.fileTreeManager.getFileTree().updatePath(params.path);
         this.emit({ type: "file-written", path: params.path });
-        return {};
       },
       moveTextFile: async (params) => {
-        this.assertSessionId(params.sessionId);
-        await this.assertProjectPath(params.sourcePath, false);
-        await this.assertProjectPath(params.destinationPath, true);
         await this.editor.moveTextFile(params.sourcePath, params.destinationPath);
-        await this.fileTreeManager.notifyPathModified(params.sourcePath);
-        await this.fileTreeManager.notifyPathModified(params.destinationPath);
+        this.fileTreeManager.getFileTree().remove(params.sourcePath);
+        await this.fileTreeManager
+          .getFileTree()
+          .updatePath(params.destinationPath);
         this.emit({ type: "file-written", path: params.destinationPath });
       },
-      onStatusNote: (text: string) => {
-        this.emit({ type: "status-note", text });
+      onStatusNote: (note: string) => {
+        this.emit({ type: "status-note", text: note });
       },
-      onThought: (text: string) => {
-        this.emit({ type: "thought", text });
+      onThought: (thought: string) => {
+        this.emit({ type: "thought", text: thought });
       },
     };
   }
 
-  dispose(): void {
-    this.cancel();
-    this.builtin = null;
-    this.sessionId = null;
-    this.sessionCwd = null;
-    this.loadedSessionIds.clear();
+  private cancelPendingPermissions(): void {
+    for (const resolve of this.permissionResolvers) {
+      resolve({ outcome: { outcome: "cancelled" } });
+    }
+    this.permissionResolvers.clear();
   }
 }

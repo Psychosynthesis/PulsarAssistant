@@ -4,17 +4,12 @@ import assert from "node:assert/strict";
 // (20.16, per .nvmrc), which can't execute TypeScript. `npm run build` emits
 // lib/agent-config.js.
 import {
-  COPILOT_AGENT_ID,
-  COPILOT_AGENT_NAME,
-  DEFAULT_AGENT_COMMAND,
   groupAgents,
   isLaunchedAgentStale,
   launchTargetsEqual,
-  migrateAgentsConfig,
   normalizeAgentsConfig,
   resolveAgent,
   resolveActiveAgent,
-  resolveApiKey,
   toLaunchTarget,
 } from "../lib/agent-config.js";
 
@@ -55,124 +50,19 @@ test("normalizeAgentsConfig: defaults a missing name to the id", () => {
   assert.equal(config.agents.foo.name, "foo");
 });
 
-test("normalizeAgentsConfig: preserves unknown fields but drops legacy version", () => {
+test("normalizeAgentsConfig: preserves unknown fields", () => {
   const config = normalizeAgentsConfig({
     version: 1,
     future: "keep-me",
     agents: { foo: { name: "Foo", command: "foo", env: { A: "1" } } },
   });
   assert.equal(config.future, "keep-me");
-  assert.equal(config.version, undefined);
+  assert.equal(config.version, 1);
   assert.deepEqual(config.agents.foo.env, { A: "1" });
 });
 
 test("normalizeAgentsConfig: drops an empty activeAgentId", () => {
   assert.equal(normalizeAgentsConfig({ activeAgentId: "  " }).activeAgentId, undefined);
-});
-
-// ---------------------------------------------------------------------------
-// migrateAgentsConfig (seeding)
-// ---------------------------------------------------------------------------
-
-test("migrateAgentsConfig: seeds the copilot default when unmigrated and empty", () => {
-  const { config, changed } = migrateAgentsConfig(undefined);
-  assert.equal(changed, true);
-  assert.equal(config.activeAgentId, COPILOT_AGENT_ID);
-  assert.deepEqual(config.agents[COPILOT_AGENT_ID], {
-    name: COPILOT_AGENT_NAME,
-    type: "acp",
-    command: DEFAULT_AGENT_COMMAND,
-  });
-});
-
-test("migrateAgentsConfig: legacy copilot command keeps the canonical identity", () => {
-  const { config } = migrateAgentsConfig(undefined, DEFAULT_AGENT_COMMAND);
-  assert.deepEqual(Object.keys(config.agents), [COPILOT_AGENT_ID]);
-  assert.equal(config.agents[COPILOT_AGENT_ID].name, COPILOT_AGENT_NAME);
-});
-
-test("migrateAgentsConfig: derives id/name from an arbitrary legacy command", () => {
-  const { config } = migrateAgentsConfig(undefined, "gemini --experimental-acp");
-  assert.deepEqual(Object.keys(config.agents), ["gemini"]);
-  assert.equal(config.agents.gemini.name, "gemini");
-  assert.equal(config.agents.gemini.command, "gemini --experimental-acp");
-  assert.equal(config.activeAgentId, "gemini");
-});
-
-test("migrateAgentsConfig: derives id/name from a quoted path command", () => {
-  const { config } = migrateAgentsConfig(undefined, '"C:\\tools\\my agent.cmd" --acp');
-  const ids = Object.keys(config.agents);
-  assert.equal(ids.length, 1);
-  assert.equal(config.agents[ids[0]].name, "my agent");
-  assert.equal(ids[0], "my-agent");
-});
-
-test("migrateAgentsConfig: precedence — existing agents beat legacy and default", () => {
-  const { config } = migrateAgentsConfig(
-    { agents: { custom: { name: "Custom", command: "custom --acp" } } },
-    "gemini --experimental-acp",
-  );
-  assert.deepEqual(Object.keys(config.agents), ["custom"]);
-  assert.equal(config.activeAgentId, "custom");
-});
-
-test("migrateAgentsConfig: preserves a valid existing activeAgentId", () => {
-  const { config } = migrateAgentsConfig({
-    activeAgentId: "b",
-    agents: {
-      a: { name: "A", command: "a" },
-      b: { name: "B", command: "b" },
-    },
-  });
-  assert.equal(config.activeAgentId, "b");
-});
-
-// ---------------------------------------------------------------------------
-// migrateAgentsConfig (idempotency / configured registry)
-// ---------------------------------------------------------------------------
-
-test("migrateAgentsConfig: is idempotent once seeded", () => {
-  const first = migrateAgentsConfig(undefined).config;
-  const second = migrateAgentsConfig(first);
-  assert.equal(second.changed, false);
-  assert.deepEqual(second.config, first);
-});
-
-test("migrateAgentsConfig: respects an intentionally empty configured registry", () => {
-  const { config, changed } = migrateAgentsConfig({ agents: {} });
-  assert.equal(changed, false);
-  assert.deepEqual(config.agents, {});
-  assert.equal(config.activeAgentId, undefined);
-});
-
-test("migrateAgentsConfig: auto-corrects a missing or invalid activeAgentId", () => {
-  const { config, changed } = migrateAgentsConfig({
-    activeAgentId: "gone",
-    agents: { a: { name: "A", type: "acp", command: "a" } },
-  });
-  assert.equal(changed, true);
-  assert.equal(config.activeAgentId, "a");
-});
-
-test("migrateAgentsConfig: stamps type on configured agents that omit it", () => {
-  const { config, changed } = migrateAgentsConfig({
-    activeAgentId: "a",
-    agents: { a: { name: "A", command: "a" } },
-  });
-  assert.equal(changed, true);
-  assert.equal(config.agents.a.type, "acp");
-  assert.equal(config.activeAgentId, "a");
-});
-
-test("migrateAgentsConfig: drops a legacy version field", () => {
-  const { config, changed } = migrateAgentsConfig({
-    version: 99,
-    activeAgentId: "a",
-    agents: { a: { name: "A", command: "a" }, bad: { name: "Bad" } },
-  });
-  assert.equal(changed, true);
-  assert.equal(config.version, undefined);
-  assert.deepEqual(Object.keys(config.agents), ["a"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -243,7 +133,7 @@ test("normalizeAgentsConfig: keeps an OpenAI-compatible API without a command", 
         type: "openai",
         baseUrl: "https://api.example/v1/",
         model: "dev",
-        apiKeyEnv: "OURS_KEY",
+        apiKey: "k",
       },
     },
   });
@@ -284,7 +174,7 @@ test("resolveAgent: falls back to the global default when the panel id is gone",
   assert.equal(resolveAgent(config, "gone").id, "a");
 });
 
-test("toLaunchTarget: openai reads the API key from env", () => {
+test("toLaunchTarget: openai reads the API key from config", () => {
   const config = normalizeAgentsConfig({
     agents: {
       ours: {
@@ -292,11 +182,11 @@ test("toLaunchTarget: openai reads the API key from env", () => {
         type: "openai",
         baseUrl: "https://api.example/v1",
         model: "dev",
-        apiKeyEnv: "OURS_KEY",
+        apiKey: "secret",
       },
     },
   });
-  const target = toLaunchTarget("ours", config.agents.ours, { OURS_KEY: "secret" });
+  const target = toLaunchTarget("ours", config.agents.ours);
   assert.equal(target.kind, "openai");
   if (target.kind === "openai") {
     assert.equal(target.apiKey, "secret");
@@ -311,7 +201,7 @@ test("toLaunchTarget: command fallback keeps the spawn command", () => {
   });
   assert.equal(target.kind, "acp");
   if (target.kind === "acp") {
-    assert.equal(target.command, DEFAULT_AGENT_COMMAND);
+    assert.equal(target.command, "copilot --acp --stdio");
   }
 });
 
@@ -346,11 +236,81 @@ test("groupAgents: API group then ACP, preserving key order", () => {
   );
 });
 
-test("resolveApiKey: direct apiKey wins over env", () => {
-  assert.equal(
-    resolveApiKey({ name: "x", apiKey: "direct", apiKeyEnv: "E" }, { E: "env" }),
-    "direct",
+test("groupAgents: openai, cursor, then acp", () => {
+  const config = normalizeAgentsConfig({
+    agents: {
+      vibe: { name: "Vibe", type: "acp", command: "vibe --acp" },
+      cursor: {
+        name: "Cursor",
+        type: "cursor",
+        baseUrl: "https://cursor.example/api",
+        defaultModel: "cursor-agent",
+        apiKey: "k",
+      },
+      ours: {
+        name: "Ours",
+        type: "openai",
+        baseUrl: "https://api.example/v1",
+        model: "dev",
+        apiKey: "k",
+      },
+    },
+  });
+  const groups = groupAgents(config.agents);
+  assert.deepEqual(
+    groups.map((group) => [group.type, group.entries.map(([id]) => id)]),
+    [
+      ["openai", ["ours"]],
+      ["cursor", ["cursor"]],
+      ["acp", ["vibe"]],
+    ],
   );
+});
+
+test("toLaunchTarget: cursor resolves model and defaults mode to agent", () => {
+  const config = normalizeAgentsConfig({
+    agents: {
+      cursor: {
+        name: "Cursor",
+        type: "cursor",
+        baseUrl: "https://cursor.example/api/",
+        defaultModel: "cursor-agent",
+        apiKey: "k",
+      },
+    },
+  });
+  const target = toLaunchTarget("cursor", config.agents.cursor);
+  assert.equal(target.kind, "cursor");
+  if (target.kind === "cursor") {
+    assert.equal(target.baseUrl, "https://cursor.example/api");
+    assert.equal(target.model, "cursor-agent");
+    assert.equal(target.mode, "agent");
+    assert.equal(target.autoCreatePR, false);
+  }
+});
+
+test("toLaunchTarget: cursor honors an explicit panel model and plan mode", () => {
+  const target = toLaunchTarget(
+    "cursor",
+    {
+      name: "Cursor",
+      type: "cursor",
+      baseUrl: "https://cursor.example/api",
+      defaultModel: "cursor-agent",
+      apiKey: "k",
+      mode: "plan",
+      autoCreatePR: true,
+      workOnCurrentBranch: true,
+    },
+    "picked",
+  );
+  assert.equal(target.kind, "cursor");
+  if (target.kind === "cursor") {
+    assert.equal(target.model, "picked");
+    assert.equal(target.mode, "plan");
+    assert.equal(target.autoCreatePR, true);
+    assert.equal(target.workOnCurrentBranch, true);
+  }
 });
 
 test("launchTargetsEqual: openai identity includes model and key", () => {
@@ -381,7 +341,6 @@ test("toLaunchTarget: openai defaults model to defaultModel over legacy model", 
       model: "legacy",
       apiKey: "k",
     },
-    {},
   );
   assert.equal(target.kind, "openai");
   if (target.kind === "openai") {
@@ -400,7 +359,6 @@ test("toLaunchTarget: openai accepts an explicit panel model", () => {
       defaultModel: "prod",
       apiKey: "k",
     },
-    {},
     "chosen",
   );
   assert.equal(target.kind, "openai");
@@ -420,7 +378,6 @@ test("toLaunchTarget: openai honors a custom modelsUrl", () => {
       apiKey: "k",
       modelsUrl: "https://example.com/custom/models",
     },
-    {},
   );
   assert.equal(target.kind, "openai");
   if (target.kind === "openai") {

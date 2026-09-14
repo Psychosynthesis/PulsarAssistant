@@ -1,7 +1,7 @@
 import { CompositeDisposable } from "atom";
-import type { OpenAiModelInfo } from "../openai-client";
+import type { ModelInfo } from "./model-info";
 
-// A dropdown for the panel-local OpenAI model choice. It deliberately owns only
+// A dropdown for the panel-local provider model choice. It deliberately owns only
 // presentation: the view keeps the selected model and fetches the model list.
 export class ModelSelector {
   readonly element: HTMLElement;
@@ -13,7 +13,8 @@ export class ModelSelector {
   constructor(
     private readonly onSelect: (id: string) => void,
     private readonly disabled: () => boolean,
-    private readonly closeSiblings: () => void,
+    private readonly disabledReason?: () => string | null,
+    private readonly closeSiblings?: () => void,
   ) {
     this.element = document.createElement("div");
     this.element.classList.add(
@@ -65,7 +66,7 @@ export class ModelSelector {
 
   openMenu(): void {
     if (this.button.disabled) return;
-    this.closeSiblings();
+    this.closeSiblings?.();
     this.menuVisible = true;
     this.menu.style.display = "";
     this.button.setAttribute("aria-expanded", "true");
@@ -84,7 +85,7 @@ export class ModelSelector {
 
   render(
     selectedId: string | null,
-    models: OpenAiModelInfo[] | null,
+    models: ModelInfo[] | null,
     loading: boolean,
   ): void {
     this.closeMenu();
@@ -113,6 +114,15 @@ export class ModelSelector {
 
     this.button.textContent = selectedId ?? "Select model";
     this.updateDisabled();
+    const disabledReason = this.disabledReason?.();
+    if (disabledReason) {
+      const tip = atom.tooltips.add(this.button, {
+        title: disabledReason,
+        placement: "top",
+        trigger: "hover",
+      });
+      this.tooltips.add(tip);
+    }
 
     for (const model of models) {
       const item = document.createElement("button");

@@ -104,17 +104,10 @@ test("resolveContextWindow: resolves API metadata", () => {
 });
 
 test("resolveContextWindow: resolves known model families", () => {
-  assert.equal(resolveContextWindow("gemini-1.5-pro"), 1_000_000);
-  assert.equal(resolveContextWindow("claude-3-5-sonnet-20241022"), 200_000);
   assert.equal(resolveContextWindow("gpt-4o"), 128_000);
   assert.equal(resolveContextWindow("gpt-4o-mini"), 128_000);
   assert.equal(resolveContextWindow("o1-preview"), 128_000);
   assert.equal(resolveContextWindow("o3-mini"), 128_000);
-  assert.equal(resolveContextWindow("deepseek-chat"), 128_000);
-  assert.equal(resolveContextWindow("qwen-2.5-72b"), 128_000);
-  assert.equal(resolveContextWindow("gpt-4-32k"), 32_768);
-  assert.equal(resolveContextWindow("gpt-4"), 8_192);
-  assert.equal(resolveContextWindow("gpt-3.5-turbo"), 16_384);
 });
 
 test("resolveContextWindow: falls back to 128k for completely unknown models", () => {

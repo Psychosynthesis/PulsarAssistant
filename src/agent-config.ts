@@ -5,20 +5,38 @@ import { parseCommandLine } from "./util";
 // built lib/agent-config.js (like util.ts). All atom.config glue lives at the
 // call sites and delegates here.
 
-export type AgentType = "openai" | "acp";
+export type AgentType = "openai" | "acp" | "cursor";
 
-export interface Agent {
+interface BaseAgentConfig {
   name: string;
-  type?: AgentType;
-  command?: string;
-  baseUrl?: string;
-  apiKey?: string;
-  apiKeyEnv?: string;
+}
+
+export type OpenAiAgentConfig = BaseAgentConfig & {
+  type: "openai";
+  baseUrl: string;
+  apiKey: string;
   defaultModel?: string;
   model?: string;
   modelsUrl?: string;
   stream?: boolean;
-}
+};
+
+export type AcpAgentConfig = BaseAgentConfig & {
+  type: "acp";
+  command: string;
+};
+
+export type CursorAgentConfig = BaseAgentConfig & {
+  type: "cursor";
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  mode?: "agent" | "plan";
+  autoCreatePR?: boolean;
+  workOnCurrentBranch?: boolean;
+};
+
+export type Agent = OpenAiAgentConfig | AcpAgentConfig | CursorAgentConfig;
 
 export interface AgentsConfig {
   activeAgentId?: string;
@@ -44,13 +62,21 @@ export type OpenaiLaunchTarget = {
   stream: boolean;
 };
 
-export type LaunchTarget = AcpLaunchTarget | OpenaiLaunchTarget;
+export type CursorLaunchTarget = {
+  id: string;
+  name: string;
+  kind: "cursor";
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  mode: "agent" | "plan";
+  autoCreatePR: boolean;
+  workOnCurrentBranch: boolean;
+};
+
+export type LaunchTarget = AcpLaunchTarget | OpenaiLaunchTarget | CursorLaunchTarget;
 
 export type ResolveReason = "ok" | "no-agents" | "unset-or-invalid";
-
-export const DEFAULT_AGENT_COMMAND = "copilot --acp --stdio";
-export const COPILOT_AGENT_ID = "copilot";
-export const COPILOT_AGENT_NAME = "GitHub Copilot";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -87,6 +113,7 @@ function hasOpenAiModel(entry: Record<string, unknown>): boolean {
 
 function agentType(entry: Record<string, unknown>): AgentType | null {
   if (entry.type === "openai") return "openai";
+  if (entry.type === "cursor") return "cursor";
   if (entry.type === "acp" || entry.type === "command") return "acp";
   if (optionalString(entry.baseUrl) && hasOpenAiModel(entry)) return "openai";
   if (optionalString(entry.command)) return "acp";
@@ -98,31 +125,11 @@ function isUsableAgent(entry: Record<string, unknown>): boolean {
   if (type === "openai") {
     return !!(optionalString(entry.baseUrl) && hasOpenAiModel(entry));
   }
+  if (type === "cursor") {
+    return !!optionalString(entry.defaultModel);
+  }
   if (type === "acp") return !!optionalString(entry.command);
   return false;
-}
-
-// Lowercase, collapse non-alphanumerics to single dashes, trim dashes.
-function sanitizeId(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-// Choose a stable id/name when seeding from a legacy command string. The known
-// Copilot default keeps its canonical identity; anything else derives from the
-// executable basename so an arbitrary command is never mislabeled as Copilot.
-function seedAgentFromCommand(command: string): { id: string; name: string } {
-  if (command.trim() === DEFAULT_AGENT_COMMAND) {
-    return { id: COPILOT_AGENT_ID, name: COPILOT_AGENT_NAME };
-  }
-  const argv = parseCommandLine(command);
-  const exe = argv[0] ?? command;
-  // path.win32 splits both `/` and `\` on every host (path.parse wouldn't).
-  const base = path.win32.parse(exe).name || exe;
-  const id = sanitizeId(base) || "agent";
-  return { id, name: base || id };
 }
 
 function normalizeAgent(
@@ -136,20 +143,50 @@ function normalizeAgent(
       : id;
   const type = agentType(entry);
   if (!type) return null;
-  const agent: Agent = { ...(entry as Record<string, unknown>), name, type };
-  if (type === "acp" && agent.command) agent.command = agent.command.trim();
-  if (type === "openai") {
-    if (agent.baseUrl) agent.baseUrl = agent.baseUrl.trim().replace(/\/+$/, "");
-    const defaultModel = optionalString(agent.defaultModel);
-    if (defaultModel) agent.defaultModel = defaultModel;
-    else delete agent.defaultModel;
-    const model = optionalString(agent.model);
-    if (model) agent.model = model;
-    else delete agent.model;
-    const modelsUrl = optionalString(agent.modelsUrl);
-    if (modelsUrl) agent.modelsUrl = modelsUrl;
-    else delete agent.modelsUrl;
+
+  if (type === "acp") {
+    const agent = {
+      ...(entry as Record<string, unknown>),
+      name,
+      type: "acp",
+    } as AcpAgentConfig;
+    const command = optionalString(entry.command);
+    if (command) agent.command = command;
+    return agent;
   }
+
+  if (type === "cursor") {
+    const agent = {
+      ...(entry as Record<string, unknown>),
+      name,
+      type: "cursor",
+    } as CursorAgentConfig;
+    agent.baseUrl =
+      optionalString(entry.baseUrl)?.trim().replace(/\/+$/, "") ??
+      "https://api.cursor.com/v1";
+    const defaultModel = optionalString(entry.defaultModel);
+    if (defaultModel) agent.defaultModel = defaultModel;
+    agent.mode = entry.mode === "plan" ? "plan" : "agent";
+    agent.autoCreatePR = entry.autoCreatePR === true;
+    agent.workOnCurrentBranch = entry.workOnCurrentBranch === true;
+    return agent;
+  }
+
+  const agent = {
+    ...(entry as Record<string, unknown>),
+    name,
+    type: "openai",
+  } as OpenAiAgentConfig;
+  if (agent.baseUrl) agent.baseUrl = agent.baseUrl.trim().replace(/\/+$/, "");
+  const defaultModel = optionalString(entry.defaultModel);
+  if (defaultModel) agent.defaultModel = defaultModel;
+  else delete agent.defaultModel;
+  const model = optionalString(entry.model);
+  if (model) agent.model = model;
+  else delete agent.model;
+  const modelsUrl = optionalString(entry.modelsUrl);
+  if (modelsUrl) agent.modelsUrl = modelsUrl;
+  else delete agent.modelsUrl;
   return agent;
 }
 
@@ -168,7 +205,6 @@ export function normalizeAgentsConfig(raw: unknown): AgentsConfig {
   }
 
   const config = { ...source, agents } as AgentsConfig;
-  delete config.version;
 
   if (
     typeof source.activeAgentId === "string" &&
@@ -180,44 +216,6 @@ export function normalizeAgentsConfig(raw: unknown): AgentsConfig {
   }
 
   return config;
-}
-
-// Seeds an empty registry and normalizes hand-written agent entries. The
-// presence of an `agents` object is the migration marker: no agents object
-// means a fresh config (seed from legacy command or the Copilot default), while
-// an explicit empty object is respected as an intentional empty registry.
-export function migrateAgentsConfig(
-  raw: unknown,
-  legacyCommand?: string,
-): { config: AgentsConfig; changed: boolean } {
-  const source = isObject(raw) ? raw : {};
-  const hasAgents =
-    Object.prototype.hasOwnProperty.call(source, "agents") &&
-    isObject(source.agents);
-  const normalized = normalizeAgentsConfig(raw);
-
-  if (hasAgents) {
-    const ids = Object.keys(normalized.agents);
-    if (
-      ids.length > 0 &&
-      (!normalized.activeAgentId || !normalized.agents[normalized.activeAgentId])
-    ) {
-      normalized.activeAgentId = ids[0];
-    }
-    return {
-      config: normalized,
-      changed: !deepEqual(source, normalized),
-    };
-  }
-
-  const command =
-    typeof legacyCommand === "string" && legacyCommand.trim() !== ""
-      ? legacyCommand.trim()
-      : DEFAULT_AGENT_COMMAND;
-  const seed = seedAgentFromCommand(command);
-  normalized.agents = { [seed.id]: { name: seed.name, type: "acp", command } };
-  normalized.activeAgentId = seed.id;
-  return { config: normalized, changed: true };
 }
 
 // STRICT launch resolution. `preferredId` is panel-local (serialized with the
@@ -252,53 +250,74 @@ export function resolveActiveAgent(config: AgentsConfig): {
   return resolveAgent(config);
 }
 
-export function resolveApiKey(
-  agent: Agent,
-  env: NodeJS.Dict<string> = process.env,
-): string | null {
-  const direct = optionalString(agent.apiKey);
-  if (direct) return direct;
-  const envName = optionalString(agent.apiKeyEnv);
-  if (!envName) return null;
-  return optionalString(env[envName]) ?? null;
-}
-
 export function toLaunchTarget(
   id: string,
   agent: Agent,
-  env: NodeJS.Dict<string> = process.env,
   model?: string,
 ): LaunchTarget {
-  const type = agent.type ?? (agent.command ? "acp" : "openai");
+  const type = agent.type ?? ((agent as AcpAgentConfig).command ? "acp" : "openai");
+
+  if (type === "cursor") {
+    const cursorAgent = agent as CursorAgentConfig;
+    const baseUrl =
+      optionalString(cursorAgent.baseUrl)?.replace(/\/+$/, "") ??
+      "https://api.cursor.com/v1";
+    const effectiveModel =
+      optionalString(model) ?? optionalString(cursorAgent.defaultModel);
+    if (!baseUrl || !effectiveModel) {
+      throw new Error(
+        `Cursor agent "${cursorAgent.name}" is missing baseUrl or defaultModel. Edit the agent config.`,
+      );
+    }
+    const apiKey = optionalString(cursorAgent.apiKey);
+    if (!apiKey) {
+      throw new Error(
+        `Cursor agent "${cursorAgent.name}" has no API key. Set apiKey.`,
+      );
+    }
+    return {
+      id,
+      name: cursorAgent.name,
+      kind: "cursor",
+      baseUrl,
+      apiKey,
+      model: effectiveModel,
+      mode: cursorAgent.mode === "plan" ? "plan" : "agent",
+      autoCreatePR: cursorAgent.autoCreatePR === true,
+      workOnCurrentBranch: cursorAgent.workOnCurrentBranch === true,
+    };
+  }
+
   if (type === "openai") {
-    const baseUrl = optionalString(agent.baseUrl)?.replace(/\/+$/, "");
+    const openaiAgent = agent as OpenAiAgentConfig;
+    const baseUrl = optionalString(openaiAgent.baseUrl)?.replace(/\/+$/, "");
     const configuredModel =
-      optionalString(agent.defaultModel) ?? optionalString(agent.model);
+      optionalString(openaiAgent.defaultModel) ?? optionalString(openaiAgent.model);
     const effectiveModel = optionalString(model) ?? configuredModel;
     if (!baseUrl || !effectiveModel) {
       throw new Error(
-        `API "${agent.name}" is missing baseUrl or defaultModel. Edit the agent config.`,
+        `API "${openaiAgent.name}" is missing baseUrl or defaultModel. Edit the agent config.`,
       );
     }
-    const apiKey = resolveApiKey(agent, env);
+    const apiKey = optionalString(openaiAgent.apiKey);
     if (!apiKey) {
-      throw new Error(
-        `API "${agent.name}" has no API key. Set apiKey or apiKeyEnv.`,
-      );
+      throw new Error(`API "${openaiAgent.name}" has no API key. Set apiKey.`);
     }
-    const modelsUrl = optionalString(agent.modelsUrl) ?? `${baseUrl}/models`;
+    const modelsUrl =
+      optionalString(openaiAgent.modelsUrl) ?? `${baseUrl}/models`;
     return {
       id,
-      name: agent.name,
+      name: openaiAgent.name,
       kind: "openai",
       baseUrl,
       apiKey,
       model: effectiveModel,
       modelsUrl,
-      stream: agent.stream === true,
+      stream: openaiAgent.stream === true,
     };
   }
-  const command = optionalString(agent.command);
+
+  const command = optionalString((agent as AcpAgentConfig).command);
   if (!command) {
     throw new Error(
       `Agent "${agent.name}" has no command. Edit the agent config.`,
@@ -311,13 +330,16 @@ export function groupAgents(
   agents: Record<string, Agent>,
 ): Array<{ type: AgentType; entries: Array<[string, Agent]> }> {
   const openai: Array<[string, Agent]> = [];
+  const cursor: Array<[string, Agent]> = [];
   const acp: Array<[string, Agent]> = [];
   for (const entry of Object.entries(agents)) {
     if (entry[1].type === "openai") openai.push(entry);
+    else if (entry[1].type === "cursor") cursor.push(entry);
     else acp.push(entry);
   }
   const groups: Array<{ type: AgentType; entries: Array<[string, Agent]> }> = [];
   if (openai.length > 0) groups.push({ type: "openai", entries: openai });
+  if (cursor.length > 0) groups.push({ type: "cursor", entries: cursor });
   if (acp.length > 0) groups.push({ type: "acp", entries: acp });
   return groups;
 }
@@ -338,6 +360,16 @@ export function launchTargetsEqual(
       a.apiKey === b.apiKey &&
       a.modelsUrl === b.modelsUrl &&
       a.stream === b.stream
+    );
+  }
+  if (a.kind === "cursor" && b.kind === "cursor") {
+    return (
+      a.baseUrl === b.baseUrl &&
+      a.model === b.model &&
+      a.apiKey === b.apiKey &&
+      a.mode === b.mode &&
+      a.autoCreatePR === b.autoCreatePR &&
+      a.workOnCurrentBranch === b.workOnCurrentBranch
     );
   }
   return false;

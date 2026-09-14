@@ -1,6 +1,6 @@
 import {
   AgentsConfig,
-  migrateAgentsConfig,
+
   normalizeAgentsConfig,
 } from "../agent-config";
 import {
@@ -20,8 +20,8 @@ export const CFG_AGENTS = "pulsar-assistant.agents";
 export const CFG_MODEL_CONTEXT_WINDOWS =
   "pulsar-assistant.modelContextWindows";
 export { CFG_PROJECTS };
-const CFG_LEGACY_COMMAND = "pulsar-assistant.command";
-const CFG_LEGACY_VERSION = "pulsar-assistant.version";
+
+
 
 function rawAgentsConfig(): Record<string, unknown> {
   const raw: Record<string, unknown> = {};
@@ -59,7 +59,7 @@ export function readProjectPolicy(projectRoot: string): ProjectPolicy {
 
 function writeProjectPolicyField(
   projectRoot: string,
-  field: "testCommand" | "maxTurnRequests" | "toolCallDelayMs",
+  field: "testCommand" | "buildCommand" | "maxTurnRequests" | "toolCallDelayMs",
   value: string | number | null,
 ): void {
   const raw = atom.config.get(CFG_PROJECTS);
@@ -99,6 +99,13 @@ export function setProjectTestCommand(
   writeProjectPolicyField(projectRoot, "testCommand", value);
 }
 
+export function setProjectBuildCommand(
+  projectRoot: string,
+  value: string | null,
+): void {
+  writeProjectPolicyField(projectRoot, "buildCommand", value);
+}
+
 // Persist only the max-turn-requests knob for one project while preserving all
 // other project entries and sibling fields in `pulsar-assistant.projects`.
 export function setProjectMaxTurnRequests(
@@ -108,32 +115,18 @@ export function setProjectMaxTurnRequests(
   writeProjectPolicyField(projectRoot, "maxTurnRequests", value);
 }
 
-export function setProjectToolCallDelay(
-  projectRoot: string,
-  value: number | null,
-): void {
-  writeProjectPolicyField(projectRoot, "toolCallDelayMs", value);
-}
-
-// Runs once in activate(): seed/migrate the registry, drop the superseded
-// legacy `command` and `version` scalars, and materialize the editable model
-// context window map in user config when it is not customized yet.
-export function migrateAgentsConfigStore(): void {
-  const legacy = atom.config.get(CFG_LEGACY_COMMAND);
-  const { config, changed } = migrateAgentsConfig(
-    rawAgentsConfig(),
-    typeof legacy === "string" ? legacy : undefined,
-  );
-  if (changed) writeAgentsConfig(config);
-  if (legacy !== undefined) atom.config.unset(CFG_LEGACY_COMMAND);
-  if (atom.config.get(CFG_LEGACY_VERSION) !== undefined) {
-    atom.config.unset(CFG_LEGACY_VERSION);
-  }
-
+export function initModelContextWindows(): void {
   const windows = atom.config.get(CFG_MODEL_CONTEXT_WINDOWS);
   if (!isObject(windows) || Object.keys(windows).length === 0) {
     atom.config.set(CFG_MODEL_CONTEXT_WINDOWS, {
       ...DEFAULT_MODEL_CONTEXT_WINDOWS,
     });
   }
+}
+
+export function setProjectToolCallDelay(
+  projectRoot: string,
+  value: number | null,
+): void {
+  writeProjectPolicyField(projectRoot, "toolCallDelayMs", value);
 }

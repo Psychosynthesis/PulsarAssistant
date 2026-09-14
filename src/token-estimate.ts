@@ -22,14 +22,9 @@ export const DEFAULT_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "o3-mini": 128_000,
   o4: 128_000,
 
-  // OpenAI legacy
-  "gpt-4-32k": 32_768,
-  "gpt-4": 8_192,
-  "gpt-3.5-turbo-16k": 16_384,
-  "gpt-3.5": 16_384,
-
   // DeepSeek
   deepseek: 128_000,
+  "deepseek-v4-pro": 1_000_000,
 
   // Qwen
   qwen: 128_000,
