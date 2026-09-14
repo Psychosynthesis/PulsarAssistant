@@ -25,6 +25,7 @@ import { contentBlocksToText } from "../session/prompt-text";
 import {
   API_HOST_CONTEXT_MESSAGE,
   MAX_TOOL_ITERATIONS,
+  TOOL_ARGUMENT_COMPACT_THRESHOLD,
   TOOL_OUTPUT_COMPACT_INTERVAL,
 } from "../constants";
 
@@ -45,6 +46,10 @@ type SessionState = {
   seenToolMessages: Set<StoredContextMessage>;
   grepResultSummaries: Map<StoredContextMessage, string>;
   toolRequestCount: number;
+  /** Set by the manual "compact context" action, consumed before the next request. */
+  compactToolHistoryRequested: boolean;
+  /** Set by the periodic tool-output trigger, consumed before the next request. */
+  compactOutputsRequested: boolean;
 };
 
 function systemPrompt(
@@ -155,9 +160,14 @@ function compactToolMessage(message: StoredContextMessage): boolean {
 }
 
 /**
- * Summarizes large arguments in assistant messages (e.g. write_file / write_diff content) to prevent context bloating.
+ * Summarizes large arguments in assistant messages (e.g. write_file / write_diff
+ * payloads) to prevent context bloating. Every string field longer than
+ * `threshold` characters is replaced with a placeholder.
  */
-function compactAssistantMessage(message: StoredContextMessage): boolean {
+function compactAssistantMessage(
+  message: StoredContextMessage,
+  threshold = TOOL_ARGUMENT_COMPACT_THRESHOLD,
+): boolean {
   if (
     message.role !== "assistant" ||
     !message.tool_calls ||
@@ -168,38 +178,31 @@ function compactAssistantMessage(message: StoredContextMessage): boolean {
   let changed = false;
   for (const call of message.tool_calls) {
     const name = call.function.name;
-    if ((name === "write_file" || name === "write_diff") && call.function.arguments) {
-      try {
-        const parsed = JSON.parse(call.function.arguments);
-        let modified = false;
-        if (typeof parsed.content === "string" && parsed.content.length > 2000) {
-          const lineCount = parsed.content.split(/\r?\n/).length;
-          parsed.content = `[File content omitted; ${lineCount} lines / ${parsed.content.length} characters written]`;
-          modified = true;
-        }
-        if (
-          typeof parsed.replaceText === "string" &&
-          parsed.replaceText.length > 2000
-        ) {
-          const lineCount = parsed.replaceText.split(/\r?\n/).length;
-          parsed.replaceText = `[Replacement text omitted; ${lineCount} lines / ${parsed.replaceText.length} characters]`;
-          modified = true;
-        }
-        if (
-          typeof parsed.replace === "string" &&
-          parsed.replace.length > 2000
-        ) {
-          const lineCount = parsed.replace.split(/\r?\n/).length;
-          parsed.replace = `[Replacement text omitted; ${lineCount} lines / ${parsed.replace.length} characters]`;
-          modified = true;
-        }
-        if (modified) {
-          call.function.arguments = JSON.stringify(parsed);
-          changed = true;
-        }
-      } catch {
-        // Ignore JSON parse errors
+    if (
+      (name !== "write_file" && name !== "write_diff") ||
+      !call.function.arguments
+    ) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(call.function.arguments) as Record<
+        string,
+        unknown
+      >;
+      if (!parsed || typeof parsed !== "object") continue;
+      let modified = false;
+      for (const [field, value] of Object.entries(parsed)) {
+        if (typeof value !== "string" || value.length <= threshold) continue;
+        parsed[field] =
+          `[${field} omitted; ${countLines(value)} lines / ${value.length} characters]`;
+        modified = true;
       }
+      if (modified) {
+        call.function.arguments = JSON.stringify(parsed);
+        changed = true;
+      }
+    } catch {
+      // Ignore JSON parse errors
     }
   }
   if (changed) {
@@ -208,6 +211,131 @@ function compactAssistantMessage(message: StoredContextMessage): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Drops every tool call and tool result from the history, keeping only the
+ * system, user and assistant text messages. Used by the manual "compact
+ * context" action, which trades all tool context for a small history.
+ */
+function dropToolCallHistory(messages: StoredContextMessage[]): number {
+  let dropped = 0;
+  const kept: StoredContextMessage[] = [];
+  for (const message of messages) {
+    if (message.role === "tool") {
+      dropped += 1;
+      continue;
+    }
+    if (message.role === "assistant" && message.tool_calls?.length) {
+      dropped += message.tool_calls.length;
+      delete message.tool_calls;
+      // An assistant turn that only carried tool calls says nothing once they
+      // are gone.
+      if (!message.content || message.content.trim() === "") {
+        dropped += 1;
+        continue;
+      }
+    }
+    kept.push(message);
+  }
+  if (kept.length !== messages.length) {
+    messages.length = 0;
+    messages.push(...kept);
+  }
+  return dropped;
+}
+
+const SKIPPED_TOOL_CALL_RESULT =
+  "The turn was cancelled by the user before this tool call ran.";
+const MISSING_TOOL_CALL_RESULT =
+  "No result was recorded for this tool call.";
+
+function toolResultMessage(
+  toolCallId: string,
+  toolName: string,
+  content: string,
+): StoredContextMessage {
+  return {
+    id: newId(),
+    timestamp: Date.now(),
+    role: "tool",
+    tool_call_id: toolCallId,
+    content,
+    metadata: {
+      toolName,
+      status: "failed",
+      error: content,
+    },
+  };
+}
+
+/** Answers the tool calls of a cancelled turn without running them. */
+function answerSkippedToolCalls(
+  session: SessionState,
+  calls: ChatToolCall[],
+): void {
+  for (const call of calls) {
+    session.messages.push(
+      toolResultMessage(
+        call.id || newId(),
+        call.function.name,
+        SKIPPED_TOOL_CALL_RESULT,
+      ),
+    );
+  }
+}
+
+/**
+ * Keeps the `assistant.tool_calls` <-> `tool` invariant the API enforces.
+ * Sessions written by earlier builds can contain a cancelled or interrupted
+ * turn whose tool calls were never answered, and the API rejects such history
+ * with an HTTP 400 on every following request, bricking the session. Repair the
+ * messages on the way out instead of trusting what was persisted.
+ */
+function repairToolCallMessages(
+  messages: StoredContextMessage[],
+): StoredContextMessage[] {
+  const answers = new Map<string, StoredContextMessage>();
+  const declared = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "assistant" && message.tool_calls) {
+      for (const call of message.tool_calls) {
+        if (call.id) declared.add(call.id);
+      }
+    }
+  }
+  for (const message of messages) {
+    if (message.role !== "tool") continue;
+    const id = message.tool_call_id;
+    if (!id || !declared.has(id) || answers.has(id)) continue;
+    answers.set(id, message);
+  }
+
+  const repaired: StoredContextMessage[] = [];
+  for (const message of messages) {
+    if (message.role === "tool") {
+      // Tool messages nobody asked for (or a duplicate answer to the same call)
+      // break the same invariant from the other side, so drop them.
+      if (answers.get(message.tool_call_id ?? "") === message) {
+        repaired.push(message);
+      }
+      continue;
+    }
+    repaired.push(message);
+    if (message.role !== "assistant" || !message.tool_calls) continue;
+    for (const call of message.tool_calls) {
+      const id = call.id;
+      if (!id || answers.has(id)) continue;
+      const stub = toolResultMessage(
+        id,
+        call.function.name,
+        MISSING_TOOL_CALL_RESULT,
+      );
+      answers.set(id, stub);
+      repaired.push(stub);
+    }
+  }
+  return repaired;
 }
 
 function toChatMessages(messages: StoredContextMessage[]): ChatMessage[] {
@@ -337,6 +465,8 @@ export class BuiltinAgent {
       seenToolMessages: new Set(),
       grepResultSummaries: new Map(),
       toolRequestCount: 0,
+      compactToolHistoryRequested: false,
+      compactOutputsRequested: false,
     };
     this.sessions.set(sessionId, session);
     await this.persistSession(session);
@@ -374,6 +504,8 @@ export class BuiltinAgent {
           seenToolMessages: new Set(),
           grepResultSummaries: new Map(),
           toolRequestCount: 0,
+          compactToolHistoryRequested: false,
+          compactOutputsRequested: false,
         };
         this.sessions.set(sessionId, session);
       }
@@ -445,51 +577,85 @@ export class BuiltinAgent {
   }
 
   /**
-   * Compacts conversation context by summarizing tool call outputs and
-   * assistant write payloads.
+   * Clears the conversation context down to its text messages: every tool call
+   * and tool result is dropped, keeping system, user and assistant text.
    *
-   * Tool output clearing is deliberately kept as a separate helper so it can
-   * also run automatically every N tool requests without triggering the rest
-   * of the full compaction flow.
+   * Applied immediately when no turn is running. While a turn is in flight the
+   * rewrite is deferred to the next request, because the running turn still
+   * reads the arguments of its not-yet-executed tool calls out of the very
+   * messages this would rewrite.
    */
   async compactContext(
     sessionId: string,
-  ): Promise<{ compactedCount: number }> {
+  ): Promise<{ compactedCount: number; deferred?: boolean }> {
     const session = this.sessions.get(sessionId);
     if (!session) return { compactedCount: 0 };
+    // A running turn still reads the arguments of its pending tool calls out of
+    // these very messages, so rewriting the history now could replace a call
+    // argument with a placeholder before the call executes. Defer to the next
+    // request, which is always built after the running turn finished.
+    if (session.pending) {
+      session.compactToolHistoryRequested = true;
+      return { compactedCount: 0, deferred: true };
+    }
+    const dropped = this.applyToolHistoryDrop(session);
+    if (dropped > 0) {
+      await this.persistSession(session);
+    }
+    return { compactedCount: dropped };
+  }
 
+  /** Drops all tool calls and results, keeping only text messages. */
+  private applyToolHistoryDrop(session: SessionState): number {
+    return dropToolCallHistory(session.messages);
+  }
+
+  /** Summarizes seen tool outputs and oversized tool call arguments. */
+  private applyOutputCompaction(session: SessionState): number {
     let compactedCount = this.compactToolMessages(session);
     for (const msg of session.messages) {
       if (compactAssistantMessage(msg)) {
         compactedCount++;
       }
     }
-
-    if (compactedCount > 0) {
-      await this.persistSession(session);
-    }
-    return { compactedCount };
+    return compactedCount;
   }
 
   private compactToolMessages(session: SessionState): number {
     let compactedCount = 0;
     for (const msg of session.messages) {
+      // Only results the model has already seen. Anything added since the last
+      // request is about to be sent for the first time, and replacing it now
+      // would mean the model never gets to see it at all.
+      if (!session.seenToolMessages.has(msg)) continue;
       if (compactToolMessage(msg)) {
         compactedCount++;
-        session.seenToolMessages.add(msg);
       }
     }
     return compactedCount;
   }
 
-  private async compactToolOutputs(
+  /**
+   * Applies compaction that was deferred while a turn was running, right before
+   * a request is built. That point is always safe: the previous turn has fully
+   * finished, so no pending tool call still needs its arguments.
+   */
+  private async prepareOutboundMessages(
     session: SessionState,
-  ): Promise<{ compactedCount: number }> {
-    const compactedCount = this.compactToolMessages(session);
-    if (compactedCount > 0) {
+  ): Promise<ChatMessage[]> {
+    let changed = false;
+    if (session.compactToolHistoryRequested) {
+      session.compactToolHistoryRequested = false;
+      if (this.applyToolHistoryDrop(session) > 0) changed = true;
+    }
+    if (session.compactOutputsRequested) {
+      session.compactOutputsRequested = false;
+      if (this.applyOutputCompaction(session) > 0) changed = true;
+    }
+    if (changed) {
       await this.persistSession(session);
     }
-    return { compactedCount };
+    return toChatMessages(repairToolCallMessages(session.messages));
   }
 
   async prompt(params: acp.PromptRequest): Promise<acp.PromptResponse> {
@@ -566,12 +732,13 @@ export class BuiltinAgent {
     const maxIterations = this.maxTurnRequests();
     for (let i = 0; i < maxIterations; i++) {
       if (signal.aborted) return { stopReason: "cancelled" };
+      const messages = await this.prepareOutboundMessages(session);
       let assistantText = "";
       let toolCalls: ChatToolCall[] | null = null;
       for await (const event of this.client.complete(
         {
           model: this.target.model,
-          messages: toChatMessages(session.messages),
+          messages,
           tools: toolsForPolicy(this.getPolicy()),
           tool_choice: "auto",
         },
@@ -622,12 +789,19 @@ export class BuiltinAgent {
         content: assistantText || null,
         tool_calls: toolCalls,
       });
-      for (const call of toolCalls) {
-        if (signal.aborted) return { stopReason: "cancelled" };
+      for (let index = 0; index < toolCalls.length; index += 1) {
+        const call = toolCalls[index];
         const delayMs = this.getPolicy().toolCallDelayMs ?? 500;
-        if (delayMs > 0) {
+        if (!signal.aborted && delayMs > 0) {
           await sleepWithSignal(delayMs, signal);
-          if (signal.aborted) return { stopReason: "cancelled" };
+        }
+        if (signal.aborted) {
+          // The assistant message above is already in the history, and the API
+          // rejects a request whose `tool_calls` are not all answered by `tool`
+          // messages. Answer the calls we are not going to run, so a cancelled
+          // turn cannot corrupt the session.
+          answerSkippedToolCalls(session, toolCalls.slice(index));
+          return { stopReason: "cancelled" };
         }
         await this.handleToolCall(sessionId, session, call, signal);
       }
@@ -672,7 +846,10 @@ export class BuiltinAgent {
     } finally {
       if (session.toolRequestCount >= TOOL_OUTPUT_COMPACT_INTERVAL) {
         session.toolRequestCount = 0;
-        await this.compactToolOutputs(session);
+        // Applied before the next request rather than here: the assistant
+        // message that carries these calls may still have unexecuted calls whose
+        // arguments must stay intact.
+        session.compactOutputsRequested = true;
       }
     }
   }

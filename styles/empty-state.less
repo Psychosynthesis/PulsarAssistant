@@ -1,0 +1,51 @@
+// Empty chat window hints (see src/view/components/chat-placeholder.ts).
+
+.pulsar-assistant-chat-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: @component-padding * 2;
+  // Only the card itself reacts to the mouse, the layer stays transparent.
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.pulsar-assistant-chat-placeholder-card {
+  pointer-events: auto;
+  max-width: 640px;
+  max-height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: @component-padding;
+  text-align: center;
+  color: @text-color-subtle;
+}
+
+.pulsar-assistant-chat-placeholder-title {
+  font-size: 1.1em;
+  font-weight: 600;
+  color: @text-color-highlight;
+}
+
+.pulsar-assistant-chat-placeholder-body {
+  text-align: left;
+  font-size: 0.9em;
+
+  pre {
+    text-align: left;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  a {
+    color: @text-color-info;
+  }
+}
+
+.pulsar-assistant-chat-placeholder-action {
+  align-self: center;
+}

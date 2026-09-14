@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-09-14
+
+- **Compact context drops tool history**: the "compact context" button now
+  removes every tool call and tool result from the conversation, keeping only
+  user and assistant messages, instead of summarizing them.
+- **Compaction applies between turns, never during one**: compaction used to
+  rewrite the history at the moment the button was pressed or the periodic
+  trigger fired. Mid-turn that could replace the arguments of tool calls that
+  had not executed yet, writing placeholders into files. The manual action now
+  applies immediately when no turn is running, and is deferred to just before
+  the next request otherwise; the periodic tool-output trigger always applies
+  before the next request. The trigger now also compacts `write_file` /
+  `write_diff` arguments, and only tool results the model has already seen, so a
+  fresh result is never hidden before the model reads it. The threshold is
+  `TOOL_ARGUMENT_COMPACT_THRESHOLD` (1000 characters) in `src/constants.ts`.
+- **`testCommand` / `buildCommand` run through the platform shell**: the
+  configured commands are spawned with `shell: true`, so `&&`, pipes and
+  redirections work, and tool shims resolve on Windows (`npm`, `npx` and `tsc`
+  are `.cmd` files that a shell-less spawn cannot execute, which made the tool
+  fail with `spawn tsc ENOENT`). `node_modules/.bin` is prepended to `PATH` for
+  these commands, so locally installed tools resolve without a global install,
+  like they do inside `npm run` scripts. `run_command` keeps the shell-less argv
+  path, because its command line is model-provided.
+- **Cancelled turn no longer bricks the session**: the builtin agent answers
+  every tool call it skips when a turn is cancelled (and repairs dangling calls
+  on the way out), so the history keeps the `assistant.tool_calls` → `tool`
+  pairing the API requires. Sessions already broken by an older build no longer
+  fail with HTTP 400 on every request.
+- **Sessions button always available**: the sessions list is filled from the
+  project session storage instead of the running backend, so sessions of the
+  project are listed even before the agent starts. Sessions created by another
+  agent stay visible (marked with an agent badge) but disabled.
+- **Sessions list on panel open**: when the panel opens with an empty chat, the
+  sessions list is shown straight away. The latest session is no longer loaded
+  automatically by the `builtin` and `cursor` backends — a new session is only
+  created when the project has none yet.
+- **Empty chat window is informative**: it now explains the situation (pick a
+  session, no sessions yet) and, on a first run without configured agents, shows
+  ready-to-copy `config.cson` examples for the `openai`, `acp`, and `cursor`
+  provider types.
+- **View refactoring**: sessions panel and chat placeholder moved out of
+  `agent-view.ts` into `src/view/components/`; pure content logic lives in
+  `src/view/empty-state-content.ts` and `src/session/project-sessions.ts`.
+  Prompt attachments moved into `src/view/components/prompt-attachments-view.ts`, shared file helpers
+  (`samePath` / `readFileFromDisk` / `isOpenableFile` / `openLocation`) into
+  `src/view/file-navigation.ts`. `agent-view.ts` lost ~330 lines.
+
 ## [0.7.2] - 2026-09-14
 
 - **Cursor client fix**: randomUUID was unavailable in older environments.

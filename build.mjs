@@ -25,6 +25,8 @@ const options = {
     "src/project-uri.ts",
     "src/project-policy.ts",
     "src/session-storage.ts",
+    "src/session/project-sessions.ts",
+    "src/view/empty-state-content.ts",
     "src/file-btree.ts",
     "src/token-estimate.ts",
     "src/editor/editor-backend.ts",

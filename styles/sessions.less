@@ -1,0 +1,128 @@
+// Extra states for the sessions panel (see src/view/components/session-list-view.ts).
+
+.pulsar-assistant-sessions-list {
+  max-height: 25vh;
+  overflow-y: auto;
+  background-color: @tool-panel-background-color;
+  border-bottom: 1px solid @pane-item-border-color;
+  padding: (@component-padding / 4) 0;
+}
+
+.pulsar-assistant-session-row {
+  display: flex;
+  align-items: center;
+  padding: 0 (@component-padding / 2);
+  border-bottom: 1px solid fade(@pane-item-border-color, 40%);
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &.is-active {
+    background-color: fade(@text-color-info, 15%);
+  }
+
+  &:not(.is-active):hover {
+    background-color: @background-color-highlight;
+  }
+
+  &:hover .pulsar-assistant-session-delete,
+  &.is-active .pulsar-assistant-session-delete {
+    opacity: 1;
+  }
+}
+
+.pulsar-assistant-session-entry {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: (@component-padding / 2);
+  text-align: left;
+  background: none;
+  border: none;
+  padding: (@component-padding * 0.6) (@component-padding / 2);
+  cursor: pointer;
+  font-family: inherit;
+
+  &:disabled {
+    cursor: default;
+  }
+
+  .pulsar-assistant-session-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: @text-color;
+    font-size: 0.9em;
+    line-height: 1.3;
+
+    .is-active & {
+      font-weight: 600;
+      color: @text-color-highlight;
+    }
+  }
+
+  .pulsar-assistant-session-time {
+    flex-shrink: 0;
+    color: @text-color-subtle;
+    font-size: 0.78em;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.pulsar-assistant-session-delete {
+  flex-shrink: 0;
+  opacity: 0;
+  background: none;
+  border: none;
+  color: @text-color-subtle;
+  padding: 4px 6px;
+  cursor: pointer;
+  font-size: 1em;
+  line-height: 1;
+  border-radius: @component-border-radius;
+
+  &::before {
+    margin-right: 0;
+  }
+
+  &:hover:not(:disabled) {
+    color: @text-color-error;
+    opacity: 1;
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+
+.pulsar-assistant-sessions-empty {
+  padding: @component-padding;
+  color: @text-color-subtle;
+  font-size: 0.9em;
+}
+
+.pulsar-assistant-sessions-header {
+  margin: @component-padding;
+}
+
+.pulsar-assistant-session-row.is-foreign {
+  opacity: 0.6;
+
+  .pulsar-assistant-session-entry {
+    cursor: default;
+  }
+}
+
+.pulsar-assistant-session-agent {
+  flex: none;
+  padding: 0 0.4em;
+  border-radius: @component-border-radius;
+  background-color: @background-color-highlight;
+  color: @text-color-subtle;
+  font-size: 0.85em;
+}

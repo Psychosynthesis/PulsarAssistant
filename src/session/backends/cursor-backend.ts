@@ -173,24 +173,15 @@ export class CursorBackend implements AgentBackend {
       supportsImages: false,
     });
 
+    // Sessions already stored for the project are left for the user to pick
+    // from the sessions list; a new one is created only when there is none.
     const summaries = await listStoredSessions(this.storageDir);
-    const cursorSummaries = summaries.filter(
+    const hasStoredSessions = summaries.some(
       (summary) => summary.providerState?.kind === "cursor",
     );
-
-    let sessionId: string;
-    if (cursorSummaries.length > 0) {
-      const latest = cursorSummaries[0];
-      const stored = await loadStoredSession(this.storageDir, latest.id);
-      if (stored) {
-        await this.adoptStoredSession(stored, stored.projectRoot);
-        sessionId = stored.id;
-      } else {
-        sessionId = await this.createLocalSession(cwd);
-      }
-    } else {
-      sessionId = await this.createLocalSession(cwd);
-    }
+    const sessionId = hasStoredSessions
+      ? null
+      : await this.createLocalSession(cwd);
 
     return {
       sessionId,

@@ -1,4 +1,5 @@
 import { ChildProcess } from "child_process";
+import { delimiter } from "path";
 import { pathToFileURL } from "url";
 import spawn from "cross-spawn";
 import * as acp from "@agentclientprotocol/sdk";
@@ -305,14 +306,38 @@ export type CapturedProcessResult = {
   signal: string | null;
 };
 
-// Spawn without a shell. Used by builtin run_command / run_tests after the
-// user has opted in via Pulsar config. Not the ACP terminal API.
+/**
+ * Runs a command, either as argv (`command` + `args`) or, with `shell`, as a
+ * command line through the platform shell.
+ *
+ * The shell path is only used for commands that come from Pulsar user config
+ * (`testCommand`, `buildCommand`), never for model-provided ones. A shell is
+ * needed for two things a bare `spawn` cannot do:
+ * - `&&`, `|` and redirections are shell syntax, and the config uses it
+ *   (`tsc --noEmit && node build.mjs`);
+ * - tool shims like `npm`, `npx` and `tsc` are `.cmd` files on Windows, which
+ *   only a shell can resolve.
+ *
+ * `shell: true` is what Node itself uses for platform-correct handling:
+ * `cmd.exe /d /s /c "<line>"` on Windows (with the verbatim-arguments flag, so
+ * cmd's own quoting rules apply) and `/bin/sh -c "<line>"` elsewhere. Passing
+ * the command line as one string, and `args` empty, is what makes `&&` and
+ * nested quotes work.
+ */
 export async function runCapturedProcess(options: {
   command: string;
   args: string[];
   cwd: string;
   signal: AbortSignal;
   outputByteLimit?: number;
+  /** Run `command` (joined with `args`) as a shell command line. */
+  shell?: boolean;
+  /**
+   * Directories prepended to `PATH` for the child process, so local tool shims
+   * (`node_modules/.bin/tsc`, which is a `.cmd` on Windows) resolve without a
+   * global install. `npm run` does the same for scripts.
+   */
+  pathDirs?: string[];
 }): Promise<CapturedProcessResult> {
   const limit = Math.max(
     1,
@@ -328,6 +353,16 @@ export async function runCapturedProcess(options: {
   env.PAGER = "";
   env.GIT_PAGER = "cat";
   env.GIT_TERMINAL_PROMPT = "0";
+  const pathDirs = (options.pathDirs ?? []).filter((dir) => dir.length > 0);
+  if (pathDirs.length > 0) {
+    // Windows spells it `Path`, POSIX `PATH`; reuse whichever key exists so the
+    // environment does not end up with two competing entries.
+    const key =
+      Object.keys(env).find((name) => name.toLowerCase() === "path") ?? "PATH";
+    const current = env[key];
+    const prefix = pathDirs.join(delimiter);
+    env[key] = current ? `${prefix}${delimiter}${current}` : prefix;
+  }
 
   const child = spawn(options.command, options.args, {
     cwd: options.cwd,
@@ -335,6 +370,7 @@ export async function runCapturedProcess(options: {
     stdio: ["ignore", "pipe", "pipe"],
     detached: process.platform !== "win32",
     windowsHide: true,
+    shell: options.shell === true,
   });
   const record = new TerminalRecord(child, limit, () => {});
   child.stdout?.on("data", (chunk: Buffer) => record.append(chunk));

@@ -218,6 +218,22 @@ The bar turns yellow above 70% and red above 90%.
 
 To save tokens on long multi-turn conversations, click the **Compact conversation context** button (`icon-fold`) in the header right controls. This replaces bulky historical outputs from previous tool invocations (`read_file`, `list_dir`, `find_files`, `get_file_structure`, `git`, `write_file`, etc.) with compact summaries, immediately reducing context window consumption for follow-up prompts.
 
+### Working with sessions
+
+Stored sessions are listed per project, not per agent: the sessions button in the
+header (`icon-history`) shows every session saved for the project folder,
+including sessions created by another agent. Rows of other agents are marked with
+an agent badge and stay disabled until you switch to that agent.
+
+When you open the panel and the chat is still empty, the sessions list is shown
+right away. The latest session is **not** loaded automatically — pick one from
+the list or press `+` to start a new session. A new session is created
+automatically only when the project has no sessions yet.
+
+While there is nothing to read, the chat window shows a hint: session selection,
+"no sessions yet", or — on a first run without configured agents — ready-to-copy
+`config.cson` examples for the `openai`, `acp`, and `cursor` provider types.
+
 ### Managing projects & storage
 
 Open the modal via **Packages → Pulsar Assistant → Manage Projects & Storage**, through the command palette (`pulsar-assistant:manage-projects`), or from the agent dropdown menu ("Manage projects & storage…").
@@ -241,15 +257,26 @@ npm run watch
 
 Pulsar loads `lib/main.js`. Rebuild after editing `src/`, then reload Pulsar.
 
+`npm run typecheck` goes through `scripts/typecheck.mjs`: the wrapper always
+compiles the project with `tsconfig.json` and ignores any extra arguments, so it
+stays usable from editors and hooks that append a path or changed files to the
+command (plain `tsc` would fail with TS5112 / TS5042, and a bare `tsc` is not on
+`PATH` on Windows — point your editor's build command at `npm run typecheck`).
+The type check also runs as part of `npm test` (`test/typecheck.test.mjs`).
+
 ## Architecture
 
 - `src/main.ts` registers commands, opener, dock item, deserializer, and
   status-bar service consumer. It never stores project paths in `config.cson`.
 - `src/view/` renders the panel UI (`PulsarAssistantView` plus split helpers).
+- `src/view/components/` holds the extracted UI pieces (`SessionListView`, `ChatPlaceholderView`, `PromptAttachmentsView`, tool calls, permissions, plan bar).
+- `src/view/file-navigation.ts` is the shared file helper layer (path comparison, opening editors at a line).
+- `src/view/empty-state-content.ts` is the pure content/state logic behind the empty chat window.
 - `src/view/context-progress-bar.ts` renders the real-time context capacity bar and tooltips.
 - `src/view/projects-storage-modal.ts` implements the projects and disk storage management dialog.
 - `src/editor/` provides the `EditorBackend` abstraction (`PulsarEditorBackend`) isolating editor buffers, containment checks, and file watchers from the rest of the application.
 - `src/session/agent-session.ts` is the unified facade managing session lifecycle and routing calls to drivers.
+- `src/session/project-sessions.ts` lists stored project sessions in an agent-agnostic way (data for the sessions list).
 - `src/session/backends/` implements agent drivers (`AgentBackend`):
   - `BuiltinBackend`: in-process OpenAI-compatible HTTP agent.
   - `AcpCliBackend`: spawned ACP CLI processes communicating over JSON-RPC stdio.

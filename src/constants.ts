@@ -10,6 +10,12 @@ export const MAX_TOOL_ITERATIONS = 200; // This is default
 
 export const TOOL_OUTPUT_COMPACT_INTERVAL = 20;
 
+/**
+ * Tool arguments (write_file / write_diff payloads) longer than this many
+ * characters are replaced with a placeholder during context compaction.
+ */
+export const TOOL_ARGUMENT_COMPACT_THRESHOLD = 1000;
+
 export const HOST_CONTEXT_START = "<pulsar-assistant-host-context>";
 export const HOST_CONTEXT_END = "</pulsar-assistant-host-context>";
 

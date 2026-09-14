@@ -109,6 +109,9 @@ async function openForCurrentProject(options: {
   }
 
   const view = await openProjectPanel(root);
+  if (view && (options.focus || options.toggle)) {
+    view.onPanelShown();
+  }
   if (options.focus && view) {
     view.focusComposer();
   }

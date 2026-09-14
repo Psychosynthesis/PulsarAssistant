@@ -44,10 +44,29 @@ import { ComposerStatusBar } from "./components/composer-status-bar";
 import { PlanBarView } from "./components/plan-bar-view";
 import { ToolCallManager, ToolUpdate } from "./components/tool-call-view";
 import { PermissionManager } from "./components/permission-view";
-import { TestCommandModal, BuildCommandModal } from "./components/test-command-modal";
+import {
+  TestCommandModal,
+  BuildCommandModal,
+} from "./components/test-command-modal";
+import { SessionListView } from "./components/session-list-view";
+import { ChatPlaceholderView } from "./components/chat-placeholder";
+import {
+  PromptAttachmentsView,
+  type MaterializedContext,
+} from "./components/prompt-attachments-view";
+import {
+  isOpenableFile as checkOpenableFile,
+  openLocation as openFileLocation,
+  samePath,
+} from "./file-navigation";
+import { resolveChatPlaceholderKind } from "./empty-state-content";
+import {
+  describeProjectSessions,
+  parseSessionTimestamp,
+  type ProjectSessionEntry,
+} from "../session/project-sessions";
 import type { AgentStatusReporter } from "./status-indicator";
 import { estimateSessionTokens, resolveContextWindow } from "../token-estimate";
-import { fileUri } from "../util";
 import { createElement } from "./utils";
 
 /**
@@ -57,11 +76,16 @@ import { createElement } from "./utils";
  * - PlanBarView: agent task plan checklist, progress and completed snapshots
  * - ToolCallManager: collapsible tool executions, diffs, line counts
  * - PermissionManager: permission dialogs, allow/reject, auth picker
+ * - SessionListView: sessions button, sessions panel, session rows
+ * - ChatPlaceholderView: empty chat window hints and first-run agent setup help
+ * - PromptAttachmentsView: context menu, chips and materialization of prompt
+ *   attachments (current file / selection)
+ * - file-navigation.ts: samePath / readFileFromDisk / isOpenableFile / openLocation
  *
  * TODO (Future Phase 2):
- * - Extract SessionListView into src/view/components/session-list-view.ts
- * - Extract PromptAttachmentsView into src/view/components/prompt-attachments-view.ts
  * - Extract InfoPanel / Details into src/view/components/info-panel-view.ts
+ * - Extract FollowAgentController into src/view/follow-agent.ts
+ * - Split buildUI() into per-area builders (panel-chrome.ts)
  */
 
 export type AgentStatus =
@@ -72,17 +96,6 @@ export type AgentStatus =
   | "awaiting"
   | "warning"
   | "error";
-
-type PendingContext =
-  | { kind: "file"; path: string }
-  | { kind: "selection"; path: string; rangeText: string };
-
-type MaterializedContext = {
-  kind: "file" | "selection";
-  label: string;
-  uri: string;
-  text: string;
-};
 
 function flattenInfoRows(
   value: unknown,
@@ -129,15 +142,16 @@ export class PulsarAssistantView {
   private modelSelectorWrap!: HTMLElement;
   private modelSelector!: ModelSelector;
   private contextProgressBar!: ContextProgressBar;
-  private sessionsToggle!: HTMLButtonElement;
+  private sessionListView!: SessionListView;
+  private chatPlaceholder!: ChatPlaceholderView;
   private compactButton!: HTMLButtonElement;
   private newSessionButton!: HTMLButtonElement;
   private settingsButton!: HTMLButtonElement;
   private settingsMenu!: HTMLElement;
   private settingsMenuOpen = false;
-  private sessionsList!: HTMLElement;
-  private sessionsListVisible = false;
-  private knownSessions: acp.SessionInfo[] = [];
+  private projectSessions: ProjectSessionEntry[] = [];
+  private sessionsRequestId = 0;
+  private sessionsLoaded = false;
   private sessionConversationCache = new Map<string, HTMLElement>();
   private sessionLiveState = new Map<string, string | null>();
   private conversationWrapper!: HTMLElement;
@@ -159,14 +173,8 @@ export class PulsarAssistantView {
   private followTimer: ReturnType<typeof setTimeout> | null = null;
   private followPending: { path: string; line?: number | null } | null = null;
   private followGeneration = 0;
-  private contextControl!: HTMLElement;
-  private contextTrigger!: HTMLButtonElement;
-  private contextMenu!: HTMLElement;
-  private contextMenuVisible = false;
-  private addSelectionItem!: HTMLButtonElement;
-  private addFileItem!: HTMLButtonElement;
-  private contextStrip!: HTMLElement;
-  private pendingContext: PendingContext[] = [];
+  private attachments!: PromptAttachmentsView;
+
   private configSelectorsContainer!: HTMLElement;
   private configSelectors: ConfigSelector[] = [];
   private settingConfig = new Set<string>();
@@ -189,7 +197,6 @@ export class PulsarAssistantView {
   private subscriptions = new CompositeDisposable();
   private eventSubscription!: Disposable;
   private conversationTooltips = new CompositeDisposable();
-  private sessionTooltips = new CompositeDisposable();
 
   private agentsConfig: AgentsConfig;
   private selectedAgentId: string | null = null;
@@ -265,7 +272,7 @@ export class PulsarAssistantView {
 
     this.subscriptions.add(
       atom.workspace.onDidStopChangingActivePaneItem(() => {
-        this.refreshContextMenuItems();
+        this.attachments.refresh();
       }),
     );
 
@@ -600,6 +607,7 @@ export class PulsarAssistantView {
     this.renderAgentPicker();
     this.renderModelSelector();
     this.updateInputControls();
+    this.updateChatPlaceholder();
   }
 
   private handleStartupError(error: unknown): void {
@@ -747,14 +755,35 @@ export class PulsarAssistantView {
       void this.compactContext();
     });
 
-    this.sessionsToggle = createElement("button", { class: ["pulsar-assistant-sessions-toggle", "icon", "icon-history"], style: { display: "none" } });
-    this.sessionsToggle.setAttribute("aria-label", "Sessions");
-    this.sessionsToggle.setAttribute("aria-expanded", "false");
-    this.subscriptions.add(
-      atom.tooltips.add(this.sessionsToggle, { title: "Sessions" }),
-    );
-    this.sessionsToggle.addEventListener("click", () => {
-      this.setSessionsListVisible(!this.sessionsListVisible);
+    this.sessionListView = new SessionListView({
+      getSessions: () =>
+        describeProjectSessions(this.projectSessions, {
+          activeAgentId: this.session.launchedAgent?.id ?? this.selectedAgentId,
+          agentNames: this.agentNames(),
+          allowSelect: Boolean(this.session.launchedAgent),
+          allowDelete: this.session.canDeleteSession(),
+        }),
+      getActiveSessionId: () => this.session.sessionId,
+      onOpen: () => {
+        void this.refreshProjectSessions();
+      },
+      onSelect: (id, cwd) => {
+        this.switchToSession(id, cwd ?? undefined);
+      },
+      onDelete: (id, cwd) => {
+        this.confirmDeleteSession(id, cwd ?? undefined);
+      },
+      addTooltip: (element, title) =>
+        atom.tooltips.add(element, { title }),
+    });
+
+    this.attachments = new PromptAttachmentsView({
+      isPathInProjectRoots: (filePath) =>
+        this.session.isPathInProjectRoots(filePath),
+      supportsEmbeddedContext: () => this.session.supportsEmbeddedContext(),
+      closeOtherMenus: () => this.closeAllConfigMenus(),
+      onError: (message) => this.appendError(message),
+      onItemsChanged: () => this.updateInputControls(),
     });
 
     this.newSessionButton = createElement("button", { class: ["pulsar-assistant-new-session", "icon", "icon-plus"], style: { display: "none" } });
@@ -835,8 +864,6 @@ export class PulsarAssistantView {
       ),
     );
 
-    this.sessionsList = createElement("div", { class: "pulsar-assistant-sessions-list", style: { display: "none" } });
-
     this.infoButton = createElement("button", { class: "pulsar-assistant-info-toggle", style: { display: "none" } });
     this.infoButton.textContent = "More\u2026";
     this.infoButton.setAttribute("aria-label", "Agent details");
@@ -856,7 +883,7 @@ export class PulsarAssistantView {
 
     const rightGroup = createElement("div", { class: "pulsar-assistant-header-right" });
     rightGroup.appendChild(this.compactButton);
-    rightGroup.appendChild(this.sessionsToggle);
+    rightGroup.appendChild(this.sessionListView.getToggleElement());
     rightGroup.appendChild(this.newSessionButton);
     rightGroup.appendChild(settingsWrap);
 
@@ -873,6 +900,12 @@ export class PulsarAssistantView {
     this.attachConversationScrollListener();
 
     this.conversationWrapper = createElement("div", { class: "pulsar-assistant-conversation-wrapper" });
+    this.chatPlaceholder = new ChatPlaceholderView({
+      onOpenAgentSettings: () => {
+        atom.commands.dispatch(this.element, "pulsar-assistant:edit-agents");
+      },
+      agentName: () => resolveAgent(this.agentsConfig, this.selectedAgentId).agent?.name,
+    });
 
     this.loadingOverlay = createElement("div", { class: "pulsar-assistant-loading-overlay", style: { display: "none" } });
     const loadingLabel = createElement("div", { class: "pulsar-assistant-loading-label" });
@@ -881,7 +914,6 @@ export class PulsarAssistantView {
 
     const footer = createElement("div", { class: "pulsar-assistant-footer" });
 
-    this.contextStrip = createElement("div", { class: "pulsar-assistant-context-strip", style: { display: "none" } });
 
     this.input = createElement("textarea", { class: ["pulsar-assistant-input", "native-key-bindings"] });
     this.input.setAttribute("rows", "3");
@@ -945,14 +977,14 @@ export class PulsarAssistantView {
         if (!this.followAgent) return;
         const activePath = editor?.getPath();
         if (!activePath) return;
-        if (this.followTargetPath && this.samePath(activePath, this.followTargetPath)) {
+        if (this.followTargetPath && samePath(activePath, this.followTargetPath)) {
           return;
         }
         this.setFollowAgent(false);
       }),
     );
 
-    actions.appendChild(this.buildContextControl());
+    actions.appendChild(this.attachments.getControlElement());
     actions.appendChild(this.buildConfigSelectors());
     actions.appendChild(this.buildTurnLimitControl());
     actions.appendChild(this.buildToolDelayControl());
@@ -963,7 +995,7 @@ export class PulsarAssistantView {
     actionButtons.appendChild(this.stopButton);
     actionButtons.appendChild(this.sendButton);
 
-    footer.appendChild(this.contextStrip);
+    footer.appendChild(this.attachments.getStripElement());
     footer.appendChild(this.statusBar.getElement());
     footer.appendChild(this.buildSlashComposer());
     footer.appendChild(actions);
@@ -971,8 +1003,9 @@ export class PulsarAssistantView {
 
     this.element.appendChild(header);
     this.element.appendChild(this.infoPanel);
-    this.element.appendChild(this.sessionsList);
+    this.element.appendChild(this.sessionListView.getPanelElement());
     this.conversationWrapper.appendChild(this.conversation);
+    this.conversationWrapper.appendChild(this.chatPlaceholder.getElement());
     this.conversationWrapper.appendChild(this.loadingOverlay);
 
     this.scrollToBottomButton = createElement("button", { class: ["pulsar-assistant-scroll-to-bottom", "icon", "icon-chevron-down"], style: { display: "none" } });
@@ -1178,7 +1211,7 @@ export class PulsarAssistantView {
           ),
         () => {
           this.closeAllConfigMenus();
-          this.closeContextMenu();
+          this.attachments.closeContextMenu();
         },
       );
       selector.render(option);
@@ -1262,7 +1295,7 @@ export class PulsarAssistantView {
   private scheduleFollow(filePath: string, line?: number | null): void {
     if (
       this.followTargetPath &&
-      this.samePath(filePath, this.followTargetPath) &&
+      samePath(filePath, this.followTargetPath) &&
       (line ?? null) === this.followTargetLine
     ) {
       return;
@@ -1660,8 +1693,8 @@ export class PulsarAssistantView {
     this.preparingPrompt = true;
     this.updateInputControls();
     try {
-      context = await this.materializePendingContext();
-      this.clearContext();
+      context = await this.attachments.materialize();
+      this.attachments.clear();
     } catch (error) {
       this.appendError(error instanceof Error ? error.message : String(error));
       return;
@@ -1708,7 +1741,7 @@ export class PulsarAssistantView {
     this.clearConversation();
     this.closeSlashMenu();
     this.hideSlashHint();
-    this.contextControl.style.display = "none";
+    this.attachments.setVisible(false);
     this.resetAgentChrome();
     this.resetSessionsChrome();
     this.setAgentStatus("idle");
@@ -1868,6 +1901,7 @@ export class PulsarAssistantView {
       empty.textContent = "No agents configured";
       this.agentMenu.appendChild(empty);
     }
+    this.refreshSessionsList();
   }
 
   private agentMenuItems(): HTMLButtonElement[] {
@@ -1958,16 +1992,12 @@ export class PulsarAssistantView {
   }
 
   private resetSessionsChrome(): void {
-    this.sessionTooltips.dispose();
-    this.sessionTooltips = new CompositeDisposable();
-    this.sessionsToggle.style.display = "none";
+    this.sessionListView.setBusy(false);
+    this.sessionListView.close();
     this.newSessionButton.style.display = "none";
-    const rows = this.sessionsList.querySelectorAll(".pulsar-assistant-session-row");
-    rows.forEach((r) => r.remove());
-    this.sessionsList.style.display = "none";
-    this.knownSessions = [];
-    this.sessionsListVisible = false;
-    this.sessionsToggle.setAttribute("aria-expanded", "false");
+    // The project sessions stay listed: restarting an agent does not change
+    // which sessions the project has.
+    this.refreshSessionsList();
     this.sessionConversationCache.clear();
     this.sessionLiveState.clear();
     this.planBarView.clearActivePlan();
@@ -2009,6 +2039,7 @@ export class PulsarAssistantView {
   private clearConversation(): void {
     this.conversation.innerHTML = "";
     this.resetConversationState();
+    this.updateChatPlaceholder();
   }
 
   private resetConversationState(): void {
@@ -2019,7 +2050,7 @@ export class PulsarAssistantView {
     this.conversationTooltips = new CompositeDisposable();
     this.planBarView.clearActivePlan();
     this.preparingPrompt = false;
-    this.clearContext();
+    this.attachments.clear();
     this.endStreamingBlocks();
     this.stickToBottom = true;
     this.generatingIndicator = null;
@@ -2028,7 +2059,7 @@ export class PulsarAssistantView {
 
   private startNewSession(): void {
     if (this.session.running || this.session.switching) return;
-    this.setSessionsListVisible(false);
+    this.sessionListView.close();
     this.stashActiveSessionLiveState();
     const currentId = this.session.sessionId;
     if (currentId) this.stashConversation(currentId);
@@ -2044,7 +2075,8 @@ export class PulsarAssistantView {
       .then(() => {
         this.input.focus();
         this.updateContextProgress();
-      this.updateInputControls();
+        this.updateInputControls();
+        void this.refreshProjectSessions();
       })
       .catch((error) => {
         if (currentId) this.rollbackConversation(currentId);
@@ -2052,10 +2084,10 @@ export class PulsarAssistantView {
       });
   }
 
-  private switchToSession(id: string): void {
+  private switchToSession(id: string, cwd?: string): void {
     if (this.session.running || this.session.switching) return;
     if (id === this.session.sessionId) return;
-    this.setSessionsListVisible(false);
+    this.sessionListView.close();
     this.stashActiveSessionLiveState();
     const currentId = this.session.sessionId;
     if (currentId) this.stashConversation(currentId);
@@ -2079,6 +2111,7 @@ export class PulsarAssistantView {
       this.input.focus();
       this.updateContextProgress();
       this.updateInputControls();
+      this.refreshSessionsList();
       return;
     }
 
@@ -2091,7 +2124,7 @@ export class PulsarAssistantView {
     this.userEchoSkipCount = 0;
 
     this.session
-      .loadSession(id)
+      .loadSession(id, cwd)
       .then(() => {
         this.hideLoadingOverlay();
         this.restoreLiveState(id);
@@ -2102,7 +2135,8 @@ export class PulsarAssistantView {
         this.planBarView.syncSession(id);
         this.input.focus();
         this.updateContextProgress();
-      this.updateInputControls();
+        this.updateInputControls();
+        this.refreshSessionsList();
       })
       .catch((error) => {
         this.hideLoadingOverlay();
@@ -2155,6 +2189,7 @@ export class PulsarAssistantView {
     if (!state) {
       this.generatingIndicator?.remove();
       this.generatingIndicator = null;
+      this.updateChatPlaceholder();
       return;
     }
 
@@ -2197,8 +2232,8 @@ export class PulsarAssistantView {
         this.storedCapabilities = event.capabilities;
         this.agentExited = false;
         this.renderPill();
-        this.contextControl.style.display = event.supportsImages ? "" : "none";
-        this.refreshContextMenuItems();
+        this.attachments.setVisible(Boolean(event.supportsImages));
+        this.attachments.refresh();
         break;
       case "ready":
         this.hideLoadingOverlay();
@@ -2267,8 +2302,7 @@ export class PulsarAssistantView {
       case "file-written":
         break;
       case "session-list":
-        this.knownSessions = event.sessions;
-        this.renderSessionsList();
+        void this.refreshProjectSessions();
         break;
       case "stderr":
         break;
@@ -2453,325 +2487,23 @@ export class PulsarAssistantView {
     if (context.length > 0) {
       const strip = createElement("div", { class: "pulsar-assistant-message-context" });
       for (const item of context) {
-        strip.appendChild(this.makeContextChip(item.kind, item.label));
+        strip.appendChild(this.attachments.makeContextChip(item.kind, item.label));
       }
       body.appendChild(strip);
     }
   }
 
-  private buildContextControl(): HTMLElement {
-    const wrapper = createElement("div", { class: ["pulsar-assistant-config", "pulsar-assistant-context"], style: { display: "none" } });
-    this.contextControl = wrapper;
-
-    const menu = createElement("div", { class: "pulsar-assistant-config-menu", style: { display: "none" } });
-    menu.setAttribute("role", "menu");
-    this.contextMenu = menu;
-
-    this.addSelectionItem = this.makeContextMenuItem(
-      "Current selection",
-      "icon-code",
-      () => {
-        void this.addSelectionContext(
-          atom.workspace.getCenter().getActiveTextEditor(),
-        );
-      },
+  /** Thin wrappers keeping the file helpers aware of the project roots. */
+  private isOpenableFile(filePath: string): Promise<boolean> {
+    return checkOpenableFile(filePath, (target) =>
+      this.session.isPathInProjectRoots(target),
     );
-    this.addFileItem = this.makeContextMenuItem(
-      "Current file",
-      "icon-file",
-      () => {
-        void this.addActiveFileContext(
-          atom.workspace.getCenter().getActiveTextEditor(),
-        );
-      },
+  }
+
+  private openLocation(filePath: string, line?: number | null): Promise<void> {
+    return openFileLocation(filePath, line, (target) =>
+      this.session.isPathInProjectRoots(target),
     );
-    menu.appendChild(this.addSelectionItem);
-    menu.appendChild(this.addFileItem);
-
-    const trigger = createElement("button", { class: ["btn", "icon", "icon-plus", "pulsar-assistant-context-trigger"] });
-    trigger.setAttribute("aria-label", "Attach to prompt");
-    trigger.setAttribute("aria-haspopup", "true");
-    trigger.setAttribute("aria-expanded", "false");
-    this.subscriptions.add(
-      atom.tooltips.add(trigger, {
-        title: "Attach to prompt",
-        placement: "top",
-        trigger: "hover",
-      }),
-    );
-    trigger.addEventListener("click", (event) => {
-      event.stopPropagation();
-      this.toggleContextMenu();
-    });
-    this.contextTrigger = trigger;
-
-    wrapper.appendChild(menu);
-    wrapper.appendChild(trigger);
-
-    const onDocClick = (event: MouseEvent) => {
-      if (this.contextMenuVisible && !wrapper.contains(event.target as Node))
-        this.closeContextMenu();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && this.contextMenuVisible) {
-        this.closeContextMenu();
-        trigger.focus();
-      }
-    };
-    document.addEventListener("click", onDocClick);
-    document.addEventListener("keydown", onKeyDown);
-    this.subscriptions.add({
-      dispose: () => {
-        document.removeEventListener("click", onDocClick);
-        document.removeEventListener("keydown", onKeyDown);
-      },
-    });
-
-    return wrapper;
-  }
-
-  private makeContextMenuItem(
-    label: string,
-    iconClass: string,
-    onClick: () => void,
-  ): HTMLButtonElement {
-    const item = createElement("button", { class: "pulsar-assistant-config-item" });
-    item.setAttribute("role", "menuitem");
-    const icon = createElement("span", { class: ["icon", iconClass] });
-    item.appendChild(icon);
-    const name = createElement("span", { class: "pulsar-assistant-config-name" });
-    name.textContent = label;
-    item.appendChild(name);
-    item.addEventListener("click", () => {
-      this.closeContextMenu();
-      onClick();
-    });
-    return item;
-  }
-
-  private toggleContextMenu(): void {
-    if (this.contextMenuVisible) this.closeContextMenu();
-    else this.openContextMenu();
-  }
-
-  private openContextMenu(): void {
-    if (this.contextTrigger.disabled) return;
-    this.closeAllConfigMenus();
-    this.refreshContextMenuItems();
-    this.contextMenuVisible = true;
-    this.contextMenu.style.display = "";
-    this.contextTrigger.setAttribute("aria-expanded", "true");
-  }
-
-  private closeContextMenu(): void {
-    if (!this.contextMenuVisible) return;
-    this.contextMenuVisible = false;
-    this.contextMenu.style.display = "none";
-    this.contextTrigger.setAttribute("aria-expanded", "false");
-  }
-
-  private refreshContextMenuItems(): void {
-    const editor = atom.workspace.getCenter().getActiveTextEditor();
-    const hasFile = !!editor && !!editor.getPath();
-    const embedded = this.session.supportsEmbeddedContext();
-
-    this.addSelectionItem.style.display = embedded ? "" : "none";
-    this.addSelectionItem.disabled =
-      !hasFile || !editor || !this.lastNonEmptySelection(editor);
-
-    this.addFileItem.style.display = embedded ? "" : "none";
-    this.addFileItem.disabled = !hasFile;
-
-    const anyEnabled =
-      embedded && (!this.addSelectionItem.disabled || !this.addFileItem.disabled);
-    this.contextTrigger.disabled = !anyEnabled;
-  }
-
-  private lastNonEmptySelection(editor: TextEditor): string | null {
-    const selections = editor.getSelections();
-    for (let i = selections.length - 1; i >= 0; i--) {
-      const text = selections[i].getText();
-      if (text.length > 0) return text;
-    }
-    return null;
-  }
-
-  async addSelectionContext(editor?: TextEditor): Promise<void> {
-    const targetEditor =
-      editor || atom.workspace.getCenter().getActiveTextEditor();
-    if (!targetEditor) return;
-    const filePath = targetEditor.getPath();
-    if (!filePath) return;
-    if (!(await this.session.isPathInProjectRoots(filePath))) {
-      this.appendError("Cannot attach file from outside the project.");
-      return;
-    }
-    const range = targetEditor.getSelectedBufferRange();
-    if (range.isEmpty()) return;
-    const rangeText = `${range.start.row + 1}-${range.end.row + 1}`;
-    this.pendingContext = this.pendingContext.filter((c) => {
-      if (c.kind === "file" && c.path === filePath) return false;
-      if (
-        c.kind === "selection" &&
-        c.path === filePath &&
-        c.rangeText === rangeText
-      )
-        return false;
-      return true;
-    });
-    this.pendingContext.push({ kind: "selection", path: filePath, rangeText });
-    this.renderContextStrip();
-  }
-
-  async addActiveFileContext(editor?: TextEditor): Promise<void> {
-    const targetEditor =
-      editor || atom.workspace.getCenter().getActiveTextEditor();
-    if (!targetEditor) return;
-    const filePath = targetEditor.getPath();
-    if (!filePath) return;
-    if (!(await this.session.isPathInProjectRoots(filePath))) {
-      this.appendError("Cannot attach file from outside the project.");
-      return;
-    }
-    this.pendingContext = this.pendingContext.filter(
-      (c) => !(c.path === filePath),
-    );
-    this.pendingContext.push({ kind: "file", path: filePath });
-    this.renderContextStrip();
-  }
-
-  private clearContext(): void {
-    this.pendingContext = [];
-    this.renderContextStrip();
-  }
-
-  private removeContextItem(index: number): void {
-    this.pendingContext.splice(index, 1);
-    this.renderContextStrip();
-  }
-
-  private makeContextChip(kind: "file" | "selection", label: string): HTMLElement {
-    const chip = createElement("span", { class: ["pulsar-assistant-context-chip", `pulsar-assistant-context-chip--${kind}`] });
-    const icon = createElement("span", { class: ["icon", kind === "file" ? "icon-file" : "icon-code", "pulsar-assistant-context-chip-icon"] });
-    const labelSpan = createElement("span", { class: "pulsar-assistant-context-chip-label" });
-    labelSpan.textContent = label;
-    chip.appendChild(icon);
-    chip.appendChild(labelSpan);
-    return chip;
-  }
-
-  private renderContextStrip(): void {
-    this.contextStrip.innerHTML = "";
-    if (this.pendingContext.length === 0) {
-      this.contextStrip.style.display = "none";
-      return;
-    }
-    this.contextStrip.style.display = "";
-    this.pendingContext.forEach((item, index) => {
-      const label =
-        item.kind === "file"
-          ? path.basename(item.path)
-          : `${path.basename(item.path)}:${item.rangeText}`;
-      const chip = this.makeContextChip(item.kind, label);
-      const remove = createElement("button", { class: ["pulsar-assistant-context-chip-remove", "icon", "icon-x"] });
-      remove.setAttribute("aria-label", `Remove ${label}`);
-      remove.addEventListener("click", () => this.removeContextItem(index));
-      chip.appendChild(remove);
-      this.contextStrip.appendChild(chip);
-    });
-  }
-
-  private async materializePendingContext(): Promise<MaterializedContext[]> {
-    const result: MaterializedContext[] = [];
-    for (const item of this.pendingContext) {
-      if (!(await this.session.isPathInProjectRoots(item.path))) {
-        throw new Error(
-          `Attached file is no longer in project: ${item.path}`,
-        );
-      }
-      const editor = this.findOpenEditorForPath(item.path);
-      const baseName = path.basename(item.path);
-      if (item.kind === "file") {
-        const text = editor
-          ? editor.getText()
-          : await this.readFileFromDisk(item.path);
-        result.push({
-          kind: "file",
-          label: baseName,
-          uri: fileUri(item.path),
-          text,
-        });
-      } else {
-        const parts = item.rangeText.split("-").map(Number);
-        const startLine = parts[0] - 1;
-        const endLine = parts[1] - 1;
-        let text: string;
-        if (editor) {
-          text = editor.getTextInBufferRange([
-            [startLine, 0],
-            [endLine + 1, 0],
-          ]);
-        } else {
-          const allLines = (await this.readFileFromDisk(item.path)).split("\n");
-          text = allLines.slice(startLine, endLine + 1).join("\n");
-        }
-        result.push({
-          kind: "selection",
-          label: `${baseName}:${item.rangeText}`,
-          uri: fileUri(item.path, { start: parts[0], end: parts[1] }),
-          text,
-        });
-      }
-    }
-    return result;
-  }
-
-  private findOpenEditorForPath(filePath: string): TextEditor | null {
-    for (const editor of atom.workspace.getTextEditors()) {
-      if (this.samePath(editor.getPath(), filePath)) return editor;
-    }
-    return null;
-  }
-
-  private samePath(a: string | undefined | null, b: string | undefined | null): boolean {
-    if (!a || !b) return false;
-    const resolvedA = path.resolve(a);
-    const resolvedB = path.resolve(b);
-    return process.platform === "win32"
-      ? resolvedA.toLowerCase() === resolvedB.toLowerCase()
-      : resolvedA === resolvedB;
-  }
-
-  private async readFileFromDisk(filePath: string): Promise<string> {
-    const fs = await import("fs/promises");
-    return fs.readFile(filePath, "utf8");
-  }
-
-  private async isOpenableFile(filePath: string): Promise<boolean> {
-    if (!filePath || !path.isAbsolute(filePath)) return false;
-    if (!(await this.session.isPathInProjectRoots(filePath))) return false;
-    try {
-      const fs = await import("fs/promises");
-      const stat = await fs.stat(filePath);
-      return stat.isFile();
-    } catch {
-      return false;
-    }
-  }
-
-  private async openLocation(
-    filePath: string,
-    line?: number | null,
-  ): Promise<void> {
-    if (!(await this.isOpenableFile(filePath))) return;
-    const editor = (await atom.workspace.open(filePath, {
-      searchAllPanes: true,
-      activatePane: true,
-    })) as TextEditor | undefined;
-    if (editor && typeof line === "number" && Number.isFinite(line)) {
-      editor.setCursorBufferPosition([line, 0]);
-      editor.scrollToCursorPosition({ center: true });
-    }
   }
 
   private appendNote(text: string): void {
@@ -2795,6 +2527,7 @@ export class PulsarAssistantView {
     }
     this.conversation.appendChild(message);
     this.scrollToBottom();
+    this.updateChatPlaceholder();
   }
 
   private endAwaitingAuth(): void {
@@ -2807,100 +2540,93 @@ export class PulsarAssistantView {
   }
 
   private renderSessionControls(): void {
-    const canList = this.session.canListSessions();
-    this.sessionsToggle.style.display = canList ? "" : "none";
     this.compactButton.style.display =
       this.session.sessionId && this.session.canCompactContext() ? "" : "none";
     this.newSessionButton.style.display = "";
-    if (canList) this.session.refreshSessionList();
+    this.session.refreshSessionList();
+    void this.refreshProjectSessions();
   }
 
   private updateSessionControls(): void {
     const busy = this.session.running || this.session.switching;
-    this.sessionsToggle.disabled = busy;
+    this.sessionListView.setBusy(busy);
     this.compactButton.disabled = false;
     this.newSessionButton.disabled = busy;
+    this.updateChatPlaceholder();
   }
 
-  private setSessionsListVisible(visible: boolean): void {
-    this.sessionsListVisible = visible;
-    this.sessionsToggle.setAttribute("aria-expanded", String(visible));
-    this.sessionsList.style.display = visible ? "" : "none";
-    if (visible) {
-      this.renderSessionsList();
-      this.session.refreshSessionList();
+  /**
+   * Sessions of the project across every agent. Comes from the session storage
+   * rather than from the backend, so it also works before the agent is started.
+   */
+  private async refreshProjectSessions(): Promise<void> {
+    const requestId = ++this.sessionsRequestId;
+    let sessions: ProjectSessionEntry[];
+    try {
+      sessions = await this.session.listProjectSessions();
+    } catch {
+      sessions = [];
     }
+    if (requestId !== this.sessionsRequestId) return;
+    this.sessionsLoaded = true;
+    this.projectSessions = sessions;
+    this.refreshSessionsList();
   }
 
-  private renderSessionsList(): void {
-    this.sessionTooltips.dispose();
-    this.sessionTooltips = new CompositeDisposable();
+  private refreshSessionsList(): void {
+    this.sessionListView.refresh();
+    this.updateChatPlaceholder();
+  }
 
-    const activeId = this.session.sessionId;
-    const canDelete = this.session.canDeleteSession();
-    const canLoad = this.session.canLoadSession();
+  /** On panel open the list shows up right away while the chat is still empty. */
+  private autoOpenSessionsList(): void {
+    if (this.session.running || this.session.switching) return;
+    if (this.conversation.childElementCount > 0) return;
+    // With no agent configured nothing can be opened, and the first-run setup
+    // help should stay readable instead of being covered by the panel.
+    if (Object.keys(this.agentsConfig.agents).length === 0) return;
+    this.sessionListView.openIfAvailable();
+  }
 
-    this.sessionsList.innerHTML = "";
-    const header = createElement("div", { class: "pulsar-assistant-sessions-header" });
-    header.textContent = "Sessions";
-    this.sessionsList.appendChild(header);
-
-    if (this.knownSessions.length === 0) {
-      const empty = createElement("div", { class: "pulsar-assistant-sessions-empty" });
-      empty.textContent = "No sessions reported.";
-      this.sessionsList.appendChild(empty);
+  private updateChatPlaceholder(): void {
+    if (!this.sessionsLoaded) {
+      // Nothing is known about the project yet; do not flash a wrong hint.
+      this.chatPlaceholder.setState("hidden");
       return;
     }
-
-    for (const info of this.knownSessions) {
-      const row = createElement("div", { class: "pulsar-assistant-session-row" });
-      const isActive = info.sessionId === activeId;
-      if (isActive) row.classList.add("is-active");
-
-      const selectBtn = createElement("button", { class: "pulsar-assistant-session-entry" });
-      selectBtn.type = "button";
-      if (isActive) selectBtn.setAttribute("aria-current", "true");
-
-      const title = createElement("span", { class: "pulsar-assistant-session-title" });
-      title.textContent = info.title || info.sessionId;
-      selectBtn.appendChild(title);
-
-      if (info.updatedAt) {
-        const time = createElement("span", { class: "pulsar-assistant-session-time" });
-        time.textContent = this.formatRelativeTime(info.updatedAt);
-        selectBtn.appendChild(time);
-      }
-
-      if (canLoad && !isActive) {
-        selectBtn.addEventListener("click", () => {
-          this.switchToSession(info.sessionId);
-        });
-      } else {
-        selectBtn.disabled = true;
-      }
-      row.appendChild(selectBtn);
-
-      if (canDelete) {
-        const deleteBtn = createElement("button", { class: ["pulsar-assistant-session-delete", "icon", "icon-trashcan"] });
-        deleteBtn.type = "button";
-        deleteBtn.setAttribute("aria-label", "Delete session");
-        this.sessionTooltips.add(
-          atom.tooltips.add(deleteBtn, { title: "Delete session" }),
-        );
-        deleteBtn.addEventListener("click", (event) => {
-          event.stopPropagation();
-          this.confirmDeleteSession(info);
-        });
-        row.appendChild(deleteBtn);
-      }
-
-      this.sessionsList.appendChild(row);
-    }
+    this.chatPlaceholder.setState(
+      resolveChatPlaceholderKind({
+        busy: this.session.running || this.session.switching,
+        hasMessages: this.conversation.childElementCount > 0,
+        agentCount: Object.keys(this.agentsConfig.agents).length,
+        sessionCount: this.projectSessions.length,
+        hasActiveSession: Boolean(this.session.sessionId),
+        hasFreshActiveSession: this.activeSessionIsFresh(),
+      }),
+    );
   }
 
-  private confirmDeleteSession(info: acp.SessionInfo): void {
+  /** True when the active session is stored and holds no messages yet. */
+  private activeSessionIsFresh(): boolean {
+    const id = this.session.sessionId;
+    if (!id) return false;
+    const entry = this.projectSessions.find((session) => session.id === id);
+    return Boolean(entry && entry.stored && entry.messageCount <= 1);
+  }
+
+  /** Config id to display name, used for sessions of other agents. */
+  private agentNames(): Record<string, string> {
+    const names: Record<string, string> = {};
+    for (const [id, agent] of Object.entries(this.agentsConfig.agents)) {
+      names[id] = agent.name || id;
+    }
+    return names;
+  }
+
+  private confirmDeleteSession(id: string, cwd?: string): void {
     if (this.session.running || this.session.switching) return;
-    const title = info.title || info.sessionId;
+    const entry = this.projectSessions.find((session) => session.id === id);
+    const title = entry?.title || id;
     atom.confirm(
       {
         type: "warning",
@@ -2910,7 +2636,7 @@ export class PulsarAssistantView {
         defaultId: 1,
       },
       (response) => {
-        if (response === 0) this.performDeleteSession(info.sessionId, info.cwd);
+        if (response === 0) this.performDeleteSession(id, cwd);
       },
     );
   }
@@ -2929,6 +2655,8 @@ export class PulsarAssistantView {
           this.setAgentStatus("ready");
           this.renderSessionControls();
           this.updateInputControls();
+        } else {
+          void this.refreshProjectSessions();
         }
       })
       .catch((error) => {
@@ -2940,32 +2668,17 @@ export class PulsarAssistantView {
     sessionId: string,
     update: acp.SessionInfoUpdate,
   ): void {
-    const existing = this.knownSessions.find((s) => s.sessionId === sessionId);
+    const existing = this.projectSessions.find(
+      (session) => session.id === sessionId,
+    );
     if (existing) {
-      if (update.title !== undefined) existing.title = update.title;
-      if (update.updatedAt !== undefined) existing.updatedAt = update.updatedAt;
+      if (update.title) existing.title = update.title;
+      const updatedAt = parseSessionTimestamp(update.updatedAt ?? null);
+      if (updatedAt) existing.updatedAt = updatedAt;
+      this.refreshSessionsList();
     } else {
-      this.knownSessions.unshift({
-        sessionId,
-        cwd: this.projectRoot,
-        title: update.title,
-        updatedAt: update.updatedAt,
-      });
+      void this.refreshProjectSessions();
     }
-    if (this.sessionsListVisible) this.renderSessionsList();
-  }
-
-  private formatRelativeTime(isoString: string): string {
-    const then = Date.parse(isoString);
-    if (Number.isNaN(then)) return "";
-    const seconds = Math.floor((Date.now() - then) / 1000);
-    if (seconds < 60) return "just now";
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
   }
 
   private stashActiveSessionLiveState(): void {
@@ -3036,12 +2749,32 @@ export class PulsarAssistantView {
     this.input.disabled = noSession;
     this.sendButton.disabled = busy || noSession || this.input.value.trim().length === 0;
     this.updateConfigSelectorsDisabled();
-    this.refreshContextMenuItems();
-    this.contextTrigger.disabled = noSession || this.contextTrigger.disabled;
+    this.attachments.refresh();
+    this.attachments.setEnabled(!noSession);
+  }
+
+  /** Composer attachments, also reachable from the menu commands. */
+  addActiveFileContext(editor: TextEditor | null | undefined): void {
+    this.attachments.addActiveFileContext(editor ?? undefined);
+  }
+
+  addSelectionContext(editor: TextEditor | null | undefined): void {
+    this.attachments.addSelectionContext(editor ?? undefined);
+  }
+
+  /**
+   * Called by the host on every panel open. Sessions are listed from storage,
+   * so the list and the chat hint do not have to wait for the agent to start.
+   */
+  onPanelShown(): void {
+    void this.refreshProjectSessions().then(() => {
+      this.autoOpenSessionsList();
+    });
   }
 
   ensureStarted(): void {
     this.isShown = true;
+    this.onPanelShown();
     const target = this.activeTarget;
     if (!target) {
       this.renderNoAgentIdle();
@@ -3053,7 +2786,8 @@ export class PulsarAssistantView {
       .start(target)
       .then(() => {
         this.updateContextProgress();
-      this.updateInputControls();
+        this.updateInputControls();
+        this.renderSessionControls();
       })
       .catch((error) => {
         if (!isStartupCancellation(error)) {
@@ -3067,14 +2801,19 @@ export class PulsarAssistantView {
     if (!sessionId) return;
     try {
       const result = await this.session.compactContext(sessionId);
-      if (result.compactedCount > 0) {
+      if (result.deferred) {
         this.statusBar.setText(
-          `Compacted ${result.compactedCount} tool result${result.compactedCount === 1 ? "" : "s"} in conversation context.`,
+          "Context will be compacted before the next request.",
+          5000,
+        );
+      } else if (result.compactedCount > 0) {
+        this.statusBar.setText(
+          `Removed ${result.compactedCount} tool call${result.compactedCount === 1 ? "" : "s"} and results from the conversation context.`,
           5000,
         );
       } else {
         this.statusBar.setText(
-          "No tool results to compact in current context.",
+          "No tool calls to remove from current context.",
           4000,
         );
       }
@@ -3094,7 +2833,9 @@ export class PulsarAssistantView {
     this.clearFollowEffects();
     this.subscriptions.dispose();
     this.conversationTooltips.dispose();
-    this.sessionTooltips.dispose();
+    this.sessionListView.dispose();
+    this.chatPlaceholder.dispose();
+    this.attachments.dispose();
     this.session.dispose();
     this.element.remove();
   }

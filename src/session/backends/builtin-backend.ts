@@ -57,29 +57,19 @@ export class BuiltinBackend implements AgentBackend {
       supportsImages: false,
     });
 
+    // Sessions already stored for the project are left for the user to pick
+    // from the sessions list; a new one is created only when there is none.
     const storedSessions = await builtin.listSessions();
-    let sessionId: string;
-    if (storedSessions.length > 0) {
-      const latest = storedSessions[0];
-      this.sessionId = latest.id;
-      this.sessionCwd = latest.projectRoot;
-      this.loadedSessionIds.add(latest.id);
-      await builtin.loadSession(latest.id);
-      if (builtin.activeTarget?.model) {
-        this.target = { ...this.target, model: builtin.activeTarget.model };
-      }
-      sessionId = latest.id;
-    } else {
+    if (storedSessions.length === 0) {
       const session = await builtin.newSession({ cwd, mcpServers: [] });
       this.sessionId = session.sessionId;
       this.sessionCwd = cwd;
       this.loadedSessionIds.add(session.sessionId);
-      sessionId = session.sessionId;
     }
 
     return {
-      sessionId,
-      cwd: this.sessionCwd,
+      sessionId: this.sessionId,
+      cwd: this.sessionCwd ?? cwd,
       configOptions: null,
     };
   }
@@ -212,7 +202,7 @@ export class BuiltinBackend implements AgentBackend {
 
   async compactContext(
     sessionId?: string,
-  ): Promise<{ compactedCount: number }> {
+  ): Promise<{ compactedCount: number; deferred?: boolean }> {
     const id = sessionId ?? this.sessionId;
     if (!this.builtin || !id) return { compactedCount: 0 };
     return this.builtin.compactContext(id);

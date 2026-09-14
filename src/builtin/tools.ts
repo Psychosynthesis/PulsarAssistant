@@ -915,6 +915,33 @@ async function runCommandTool(
   );
 }
 
+/**
+ * Runs a command from Pulsar user config through the platform shell.
+ *
+ * These commands are fixed by the user outside the project, so the model never
+ * gets to influence them, and a shell is required for `&&` and for `npm` /
+ * `tsc`, which are `.cmd` shims on Windows and need a shell to resolve them.
+ * `run_command` deliberately keeps the shell-less argv path, because its
+ * command line is model-provided.
+ */
+async function runConfiguredCommand(
+  commandLine: string,
+  cwd: string,
+  signal: AbortSignal,
+): Promise<ToolSuccess> {
+  return formatProcessResult(
+    await runCapturedProcess({
+      command: commandLine,
+      args: [],
+      shell: true,
+      // `tsc`, `npx` and friends live in node_modules/.bin and are not on PATH.
+      pathDirs: [path.join(cwd, "node_modules", ".bin")],
+      cwd,
+      signal,
+    }),
+  );
+}
+
 async function runTestsTool(
   cwd: string,
   signal: AbortSignal,
@@ -926,17 +953,8 @@ async function runTestsTool(
       "No test command configured. Set testCommand under pulsar-assistant.projects in Pulsar user config for this folder (not in the project folder).",
     );
   }
-  const argv = parseCommandLine(commandLine);
-  const command = argv[0];
-  if (!command) throw new Error("Configured testCommand is empty.");
-  return formatProcessResult(
-    await runCapturedProcess({
-      command,
-      args: argv.slice(1),
-      cwd,
-      signal,
-    }),
-  );
+  if (!commandLine.trim()) throw new Error("Configured testCommand is empty.");
+  return runConfiguredCommand(commandLine, cwd, signal);
 }
 
 async function runBuildTool(
@@ -950,17 +968,8 @@ async function runBuildTool(
       "No build command configured. Set buildCommand under pulsar-assistant.projects in Pulsar user config for this folder (not in the project folder).",
     );
   }
-  const argv = parseCommandLine(commandLine);
-  const command = argv[0];
-  if (!command) throw new Error("Configured buildCommand is empty.");
-  return formatProcessResult(
-    await runCapturedProcess({
-      command,
-      args: argv.slice(1),
-      cwd,
-      signal,
-    }),
-  );
+  if (!commandLine.trim()) throw new Error("Configured buildCommand is empty.");
+  return runConfiguredCommand(commandLine, cwd, signal);
 }
 
 function formatProcessResult(result: {

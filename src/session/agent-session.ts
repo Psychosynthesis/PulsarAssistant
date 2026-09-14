@@ -6,6 +6,12 @@ import {
 } from "../util";
 import type { LaunchTarget } from "../agent-config";
 import type { StoredContextMessage } from "../session-storage";
+import {
+  listProjectSessions as listStoredProjectSessions,
+  mergeProjectSessions,
+  parseSessionTimestamp,
+  type ProjectSessionEntry,
+} from "./project-sessions";
 import { EditorBackend, PulsarEditorBackend } from "../editor";
 import { ProjectFileTree } from "../file-btree";
 import { ProjectFileTreeManager } from "./file-tree-manager";
@@ -315,6 +321,47 @@ export class AgentSession {
     return this.backend?.isSessionLoaded(id) ?? false;
   }
 
+  /**
+   * Sessions of this project across all agents. Unlike the backend listing it
+   * works before the agent is started, so the UI can offer them on panel open.
+   */
+  async listProjectSessions(): Promise<ProjectSessionEntry[]> {
+    let entries: ProjectSessionEntry[];
+    try {
+      entries = await listStoredProjectSessions(
+        this.fileTreeManager.getStorageDir(),
+      );
+    } catch {
+      entries = [];
+    }
+
+    const backend = this.backend;
+    const target = this.startedTarget;
+    if (!backend || !target || !backend.canListSessions()) return entries;
+
+    try {
+      const cwd = await this.editor.resolveSessionCwd(this.projectRoot);
+      const listed = await backend.listSessions(cwd);
+      return mergeProjectSessions(
+        entries,
+        listed.map((session) => ({
+          id: session.sessionId,
+          title: session.title || session.sessionId,
+          agentId: target.id,
+          model: "",
+          cwd: session.cwd || cwd,
+          stored: false,
+          createdAt: 0,
+          updatedAt: parseSessionTimestamp(session.updatedAt),
+          messageCount: 0,
+        })),
+      );
+    } catch {
+      // Listing through the agent is best effort; the stored list still works.
+      return entries;
+    }
+  }
+
   async deleteSession(
     id: string,
     cwd?: string,
@@ -427,7 +474,9 @@ export class AgentSession {
     return this.backend?.getSessionMessages?.() ?? [];
   }
 
-  async compactContext(sessionId?: string): Promise<{ compactedCount: number }> {
+  async compactContext(
+    sessionId?: string,
+  ): Promise<{ compactedCount: number; deferred?: boolean }> {
     if (this.backend?.compactContext) {
       return this.backend.compactContext();
     }

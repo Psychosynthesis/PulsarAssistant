@@ -3,7 +3,8 @@ import type { LaunchTarget } from "../types";
 import type { StoredContextMessage } from "../../session-storage";
 
 export interface BackendInitResult {
-  sessionId: string;
+  /** null when the backend starts without an active session. */
+  sessionId: string | null;
   cwd: string;
   configOptions?: acp.SessionConfigOption[] | null;
 }
@@ -37,7 +38,7 @@ export interface AgentBackend {
   setModel(model: string): void;
 
   getSessionMessages?(): StoredContextMessage[];
-  compactContext?(): Promise<{ compactedCount: number }>;
+  compactContext?(): Promise<{ compactedCount: number; deferred?: boolean }>;
 
   dispose(): void;
 }
