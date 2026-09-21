@@ -119,7 +119,7 @@ test("findFiles and grepFiles: refuse paths outside the project", async () => {
     /outside the project/,
   );
   await assert.rejects(
-    grepFiles({ cwd: projectRoot, query: "foo", searchPath: "C:\\Windows" }),
+    grepFiles({ cwd: projectRoot, query: "foo", searchPath: path.resolve(projectRoot, "..") }),
     /outside the project/,
   );
 });

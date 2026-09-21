@@ -34,7 +34,9 @@ export interface SerializedProjectFileTree {
 export const DEFAULT_PROJECT_SKIP_DIRS: Set<string> = buildIgnoredDirsSet();
 
 export function toPosixPath(relPath: string): string {
-  return relPath.split(path.sep).join("/");
+  // Normalize backslashes on every platform so tree keys stay portable
+  // (e.g. a tree.json saved on Windows must load on Linux and vice versa).
+  return relPath.replace(/\\/g, "/");
 }
 
 export class BTreeNode<V> {
