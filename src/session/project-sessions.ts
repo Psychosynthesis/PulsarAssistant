@@ -26,14 +26,12 @@ export interface ProjectSessionRow {
   cwd: string | null;
   /** Label of the owning agent; null when it is the active one. */
   agentLabel: string | null;
-  selectable: boolean;
   deletable: boolean;
 }
 
 export interface ProjectSessionRowOptions {
   activeAgentId?: string | null;
   agentNames?: Record<string, string>;
-  allowSelect?: boolean;
   allowDelete?: boolean;
   now?: number;
 }
@@ -98,7 +96,7 @@ export function sortProjectSessions(
   });
 }
 
-/** Sessions that cannot be opened by the active agent stay visible but disabled. */
+/** Render sessions for the list; foreign sessions are labeled, never disabled. */
 export function describeProjectSessions(
   entries: ProjectSessionEntry[],
   options: ProjectSessionRowOptions = {},
@@ -109,7 +107,9 @@ export function describeProjectSessions(
     const isForeign = Boolean(
       activeAgentId && entry.agentId && entry.agentId !== activeAgentId,
     );
-    const selectable = (options.allowSelect ?? true) && !isForeign;
+    // Every session in the list is selectable; the view switches the active
+    // agent before opening a foreign one. Stored sessions are always deletable
+    // from disk, no backend required; backend-only listings need their backend.
     return {
       id: entry.id,
       title: entry.title,
@@ -118,8 +118,7 @@ export function describeProjectSessions(
       agentLabel: isForeign
         ? options.agentNames?.[entry.agentId] || entry.agentId
         : null,
-      selectable,
-      deletable: selectable && (options.allowDelete ?? false),
+      deletable: entry.stored || (options.allowDelete ?? false),
     };
   });
 }

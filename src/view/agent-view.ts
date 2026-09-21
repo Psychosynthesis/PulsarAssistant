@@ -67,7 +67,19 @@ import {
 } from "../session/project-sessions";
 import type { AgentStatusReporter } from "./status-indicator";
 import { estimateSessionTokens, resolveContextWindow } from "../token-estimate";
-import { createElement } from "./utils";
+import {
+  buildErrorElement,
+  createElement,
+  elementFromHtml,
+  errorMessage,
+  ref,
+} from "./utils";
+import {
+  CONFIG_SELECTORS,
+  slashComposerHtml,
+  TOOL_DELAY_CONTROL,
+  TURN_LIMIT_CONTROL,
+} from "./templates/agent-view";
 
 /**
  * Architecture note - View Refactoring:
@@ -96,6 +108,15 @@ export type AgentStatus =
   | "awaiting"
   | "warning"
   | "error";
+
+// Discriminated union for the model-selector state. Using a single field
+// prevents the impossible combinations that the previous three booleans/arrays
+// allowed (e.g. "loading" and "ready" at the same time).
+type ModelState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; models: ModelInfo[] }
+  | { status: "warning" };
 
 function flattenInfoRows(
   value: unknown,
@@ -201,12 +222,40 @@ export class PulsarAssistantView {
   private agentsConfig: AgentsConfig;
   private selectedAgentId: string | null = null;
   private selectedModelId: string | null = null;
-  private modelList: ModelInfo[] | null = null;
-  private modelsLoading = false;
-  private modelWarning = false;
+  // `modelState` is the single source of truth for the model selector.
+  private modelState: ModelState = { status: "idle" };
   private modelFetchController: AbortController | null = null;
   private modelFetchGeneration = 0;
   private activeTarget: LaunchTarget | null = null;
+
+  // Legacy shims: these getters only exist so existing readers don't have to
+  // switch on `modelState` directly. TODO: migrate callers to the union and
+  // remove the getters.
+  private get modelList(): ModelInfo[] | null {
+    return this.modelState.status === "ready" ? this.modelState.models : null;
+  }
+
+  private get modelsLoading(): boolean {
+    return this.modelState.status === "loading";
+  }
+
+  private get modelWarning(): boolean {
+    return this.modelState.status === "warning";
+  }
+
+  private resetModelState(): void {
+    this.modelState = { status: "idle" };
+    this.modelFetchController?.abort();
+    this.modelFetchController = null;
+    this.modelFetchGeneration++;
+  }
+
+  private refreshControls(): void {
+    this.renderAgentPicker();
+    this.renderModelSelector();
+    this.updateInputControls();
+  }
+
   private generatingIndicator: HTMLElement | null = null;
   private lifecycleStatus = "";
   private storedAgentInfo: acp.Implementation | null = null;
@@ -430,12 +479,7 @@ export class PulsarAssistantView {
       }
     } else {
       this.selectedModelId = null;
-      this.modelList = null;
-      this.modelsLoading = false;
-      this.modelWarning = false;
-      this.modelFetchController?.abort();
-      this.modelFetchController = null;
-      this.modelFetchGeneration++;
+      this.resetModelState();
     }
     this.renderModelSelector();
     this.updateContextProgress();
@@ -523,7 +567,7 @@ export class PulsarAssistantView {
     try {
       next = toLaunchTarget(target.id, agent, id);
     } catch (error) {
-      this.appendError(error instanceof Error ? error.message : String(error));
+      this.appendError(errorMessage(error));
       return;
     }
     this.selectedModelId = id;
@@ -545,35 +589,27 @@ export class PulsarAssistantView {
     const controller = new AbortController();
     this.modelFetchController = controller;
     const generation = ++this.modelFetchGeneration;
-    this.modelList = null;
-    this.modelsLoading = true;
-    this.modelWarning = false;
+    this.modelState = { status: "loading" };
+    this.clearModelsErrors();
     this.renderModelSelector();
     try {
       const models = await this.requestModels(target, controller.signal);
-
-
-
-
       if (generation !== this.modelFetchGeneration || controller.signal.aborted) {
         return;
       }
-      this.modelList = models;
-      this.modelsLoading = false;
-      this.modelWarning = false;
+      this.modelState = { status: "ready", models };
       this.renderModelSelector();
       this.updateContextProgress();
       this.updateInputControls();
       if (this.infoPanelOpen) this.renderInfoPanel();
-    } catch {
+    } catch (error) {
       if (generation !== this.modelFetchGeneration || controller.signal.aborted) {
         return;
       }
-      this.modelList = null;
-      this.modelsLoading = false;
-      this.modelWarning = true;
+      this.modelState = { status: "warning" };
       this.renderModelSelector();
       this.setAgentStatus("warning");
+      this.appendModelsError(target, error);
     }
   }
 
@@ -604,14 +640,12 @@ export class PulsarAssistantView {
         : "No agent selected \u2014 pick one from the menu.",
     );
     this.setAgentStatus("idle");
-    this.renderAgentPicker();
-    this.renderModelSelector();
-    this.updateInputControls();
+    this.refreshControls();
     this.updateChatPlaceholder();
   }
 
   private handleStartupError(error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     this.hideLoadingOverlay();
     this.setGeneratingState(null);
     this.appendError(message);
@@ -760,7 +794,6 @@ export class PulsarAssistantView {
         describeProjectSessions(this.projectSessions, {
           activeAgentId: this.session.launchedAgent?.id ?? this.selectedAgentId,
           agentNames: this.agentNames(),
-          allowSelect: Boolean(this.session.launchedAgent),
           allowDelete: this.session.canDeleteSession(),
         }),
       getActiveSessionId: () => this.session.sessionId,
@@ -768,7 +801,7 @@ export class PulsarAssistantView {
         void this.refreshProjectSessions();
       },
       onSelect: (id, cwd) => {
-        this.switchToSession(id, cwd ?? undefined);
+        this.openSession(id, cwd ?? undefined);
       },
       onDelete: (id, cwd) => {
         this.confirmDeleteSession(id, cwd ?? undefined);
@@ -1031,7 +1064,7 @@ export class PulsarAssistantView {
   }
 
   private buildConfigSelectors(): HTMLElement {
-    const container = createElement("div", { class: "pulsar-assistant-config-selectors", style: { display: "none" } });
+    const container = elementFromHtml(CONFIG_SELECTORS);
     this.configSelectorsContainer = container;
 
     const onDocClick = (event: MouseEvent) => {
@@ -1063,19 +1096,8 @@ export class PulsarAssistantView {
   }
 
   private buildTurnLimitControl(): HTMLElement {
-    const wrap = createElement("div", { class: "pulsar-assistant-turn-limit" });
-
-    const label = document.createElement("label");
-    label.textContent = "Tool turns";
-    label.htmlFor = "pulsar-assistant-turn-limit-input";
-
-    this.maxTurnRequestsInput = document.createElement("input");
-    this.maxTurnRequestsInput.id = "pulsar-assistant-turn-limit-input";
-    this.maxTurnRequestsInput.type = "number";
-    this.maxTurnRequestsInput.min = "1";
-    this.maxTurnRequestsInput.max = "1000";
-    this.maxTurnRequestsInput.step = "1";
-    this.maxTurnRequestsInput.placeholder = "200";
+    const wrap = elementFromHtml(TURN_LIMIT_CONTROL);
+    this.maxTurnRequestsInput = ref<HTMLInputElement>(wrap, "input");
     this.maxTurnRequestsInput.addEventListener("change", () => {
       this.saveTurnLimit();
     });
@@ -1089,8 +1111,6 @@ export class PulsarAssistantView {
       }),
     );
 
-    wrap.appendChild(label);
-    wrap.appendChild(this.maxTurnRequestsInput);
     return wrap;
   }
 
@@ -1119,19 +1139,8 @@ export class PulsarAssistantView {
   }
 
   private buildToolDelayControl(): HTMLElement {
-    const wrap = createElement("div", { class: ["pulsar-assistant-turn-limit", "pulsar-assistant-tool-delay"] });
-
-    const label = document.createElement("label");
-    label.textContent = "Delay (ms)";
-    label.htmlFor = "pulsar-assistant-tool-delay-input";
-
-    this.toolCallDelayInput = document.createElement("input");
-    this.toolCallDelayInput.id = "pulsar-assistant-tool-delay-input";
-    this.toolCallDelayInput.type = "number";
-    this.toolCallDelayInput.min = "100";
-    this.toolCallDelayInput.max = "60000";
-    this.toolCallDelayInput.step = "50";
-    this.toolCallDelayInput.placeholder = "500";
+    const wrap = elementFromHtml(TOOL_DELAY_CONTROL);
+    this.toolCallDelayInput = ref<HTMLInputElement>(wrap, "input");
     this.toolCallDelayInput.addEventListener("change", () => {
       this.saveToolDelay();
     });
@@ -1145,8 +1154,6 @@ export class PulsarAssistantView {
       }),
     );
 
-    wrap.appendChild(label);
-    wrap.appendChild(this.toolCallDelayInput);
     return wrap;
   }
 
@@ -1240,7 +1247,7 @@ export class PulsarAssistantView {
         if (option.currentValue === value) option.currentValue = previous;
         if (this.session.sessionId === sessionId) {
           this.appendError(
-            error instanceof Error ? error.message : String(error),
+            errorMessage(error),
           );
         }
       })
@@ -1516,18 +1523,11 @@ export class PulsarAssistantView {
   }
 
   private buildSlashComposer(): HTMLElement {
-    const wrap = createElement("div", { class: "pulsar-assistant-slash-wrap" });
+    const wrap = elementFromHtml(slashComposerHtml(this.slashMenuId));
 
-    this.slashMenu = createElement("div", { class: ["pulsar-assistant-picker-menu", "pulsar-assistant-slash-menu"], id: this.slashMenuId });
-    this.slashMenu.setAttribute("role", "listbox");
-    this.slashMenu.setAttribute("aria-label", "Slash commands");
-    this.slashMenu.style.display = "none";
-
-    this.slashHint = createElement("div", { class: "pulsar-assistant-slash-hint", style: { display: "none" } });
-
-    wrap.appendChild(this.slashMenu);
-    wrap.appendChild(this.input);
-    wrap.appendChild(this.slashHint);
+    this.slashMenu = ref(wrap, "menu");
+    this.slashHint = ref(wrap, "hint");
+    wrap.insertBefore(this.input, this.slashHint);
 
     const onDocPointerDown = (event: MouseEvent) => {
       if (this.slashMenuOpen && !wrap.contains(event.target as Node)) {
@@ -1696,7 +1696,7 @@ export class PulsarAssistantView {
       context = await this.attachments.materialize();
       this.attachments.clear();
     } catch (error) {
-      this.appendError(error instanceof Error ? error.message : String(error));
+      this.appendError(errorMessage(error));
       return;
     } finally {
       if (this.session === currentSession) {
@@ -1707,8 +1707,9 @@ export class PulsarAssistantView {
 
     if (text.length === 0 && context.length === 0) return;
     this.input.value = "";
+    this.clearModelsErrors();
     this.updateContextProgress();
-      this.updateInputControls();
+    this.updateInputControls();
     this.appendUserMessage(text, context);
     this.endStreamingBlocks();
     this.userEchoSkipCount++;
@@ -1773,7 +1774,7 @@ export class PulsarAssistantView {
     try {
       target = toLaunchTarget(id, agent);
     } catch (error) {
-      this.appendError(error instanceof Error ? error.message : String(error));
+      this.appendError(errorMessage(error));
       this.renderAgentPicker();
       return;
     }
@@ -1810,7 +1811,10 @@ export class PulsarAssistantView {
     this.performSwitch(target);
   }
 
-  private performSwitch(target: LaunchTarget): void {
+  private performSwitch(
+    target: LaunchTarget,
+    sessionToLoad?: { id: string; cwd?: string },
+  ): void {
     this.selectedAgentId = target.id;
     this.selectedModelId =
       target.kind === "openai" || target.kind === "cursor" ? target.model : null;
@@ -1822,17 +1826,26 @@ export class PulsarAssistantView {
     if (target.kind === "openai" || target.kind === "cursor") {
       void this.fetchModelsForTarget(target);
     } else {
-      this.modelList = null;
-      this.modelsLoading = false;
-      this.modelWarning = false;
-      this.modelFetchController?.abort();
-      this.modelFetchController = null;
-      this.modelFetchGeneration++;
+      this.resetModelState();
     }
-    this.renderAgentPicker();
-    this.renderModelSelector();
     this.setLifecycleStatus(`Starting ${target.name}\u2026`);
-    this.updateInputControls();
+    this.refreshControls();
+
+    if (sessionToLoad) {
+      this.session
+        .start(target)
+        .then(() => {
+          this.updateContextProgress();
+          this.updateInputControls();
+          this.renderSessionControls();
+          this.switchToSession(sessionToLoad.id, sessionToLoad.cwd);
+        })
+        .catch((error) => {
+          if (!isStartupCancellation(error)) this.handleStartupError(error);
+        });
+      return;
+    }
+
     this.ensureStarted();
   }
 
@@ -2009,12 +2022,7 @@ export class PulsarAssistantView {
     this.currentTokens = null;
     this.agentExited = false;
     this.settingConfig.clear();
-    this.modelFetchController?.abort();
-    this.modelFetchController = null;
-    this.modelFetchGeneration++;
-    this.modelList = null;
-    this.modelsLoading = false;
-    this.modelWarning = false;
+    this.resetModelState();
     this.renderLiveRow();
     this.renderConfigSelectors();
     this.renderModelSelector();
@@ -2080,8 +2088,49 @@ export class PulsarAssistantView {
       })
       .catch((error) => {
         if (currentId) this.rollbackConversation(currentId);
-        this.appendError(error instanceof Error ? error.message : String(error));
+        this.appendError(errorMessage(error));
       });
+  }
+
+  private openSession(id: string, cwd?: string): void {
+    if (this.session.running || this.session.switching) {
+      this.statusBar.setText(
+        "Wait for the current response to finish before switching sessions.",
+        4000,
+      );
+      return;
+    }
+
+    const entry = this.projectSessions.find((session) => session.id === id);
+    if (!entry) {
+      this.switchToSession(id, cwd);
+      return;
+    }
+
+    const agent = this.agentsConfig.agents[entry.agentId];
+    if (!agent) {
+      this.appendError(
+        `Session "${entry.title || id}" belongs to unknown agent "${entry.agentId}".`,
+      );
+      return;
+    }
+
+    let target: LaunchTarget;
+    try {
+      target = toLaunchTarget(entry.agentId, agent);
+    } catch (error) {
+      this.appendError(errorMessage(error));
+      return;
+    }
+
+    const sameAgent =
+      launchTargetsEqual(this.session.launchedAgent, target) && !this.agentExited;
+    if (sameAgent) {
+      this.switchToSession(id, cwd ?? entry.cwd);
+      return;
+    }
+
+    this.performSwitch(target, { id, cwd: cwd ?? entry.cwd });
   }
 
   private switchToSession(id: string, cwd?: string): void {
@@ -2141,7 +2190,7 @@ export class PulsarAssistantView {
       .catch((error) => {
         this.hideLoadingOverlay();
         if (currentId) this.rollbackConversation(currentId);
-        this.appendError(error instanceof Error ? error.message : String(error));
+        this.appendError(errorMessage(error));
       });
   }
 
@@ -2511,23 +2560,53 @@ export class PulsarAssistantView {
     this.scrollToBottom();
   }
 
-  private appendError(text: string): void {
-    const message = createElement("div", { class: ["pulsar-assistant-message", "pulsar-assistant-message--error"] });
-    const parts = text.split("\n\n");
-    if (parts.length > 1) {
-      const header = createElement("div", { class: "pulsar-assistant-error-header" });
-      header.textContent = parts[0];
-      message.appendChild(header);
-
-      const body = createElement("pre", { class: "pulsar-assistant-error-body" });
-      body.textContent = parts.slice(1).join("\n\n");
-      message.appendChild(body);
-    } else {
-      message.textContent = text;
-    }
-    this.conversation.appendChild(message);
+  private appendError(text: string, extraClasses: string[] = []): void {
+    this.conversation.appendChild(buildErrorElement(text, extraClasses));
     this.scrollToBottom();
     this.updateChatPlaceholder();
+  }
+
+  private clearModelsErrors(): void {
+    for (const element of this.conversation.querySelectorAll(
+      ".pulsar-assistant-models-error",
+    )) {
+      element.remove();
+    }
+    this.updateChatPlaceholder();
+  }
+
+  private describeModelsRequest(
+    target: OpenaiLaunchTarget | CursorLaunchTarget,
+  ): string {
+    if (target.kind === "openai") return target.modelsUrl;
+    return `${target.baseUrl.replace(/\/+$/, "")}/models`;
+  }
+
+  private formatHttpError(error: unknown, url?: string): string {
+    const message = errorMessage(error);
+    const status = (error as { status?: unknown } | null)?.status;
+    const body = (error as { body?: unknown } | null)?.body;
+    const lines: string[] = [];
+    if (url) lines.push(`Request: ${url}`);
+    lines.push(message);
+    if (typeof status === "number") lines.push(`HTTP status: ${status}`);
+    if (typeof body === "string" && body.trim() !== "") {
+      lines.push(`Response body: ${body.trim()}`);
+    }
+    return lines.join("\n");
+  }
+
+  private appendModelsError(
+    target: OpenaiLaunchTarget | CursorLaunchTarget,
+    error: unknown,
+  ): void {
+    this.appendError(
+      `Model list request failed\n\n${this.formatHttpError(
+        error,
+        this.describeModelsRequest(target),
+      )}`,
+      ["pulsar-assistant-models-error"],
+    );
   }
 
   private endAwaitingAuth(): void {
@@ -2660,7 +2739,7 @@ export class PulsarAssistantView {
         }
       })
       .catch((error) => {
-        this.appendError(error instanceof Error ? error.message : String(error));
+        this.appendError(errorMessage(error));
       });
   }
 
@@ -2820,7 +2899,7 @@ export class PulsarAssistantView {
       this.updateContextProgress();
       this.updateInputControls();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       this.statusBar.setText(`Failed to compact context: ${msg}`, 5000);
     }
   }

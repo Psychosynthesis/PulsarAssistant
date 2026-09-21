@@ -122,7 +122,7 @@ test("sortProjectSessions: newest first, stable on equal timestamps", () => {
   );
 });
 
-test("describeProjectSessions: sessions of other agents are shown but disabled", () => {
+test("describeProjectSessions: every row is selectable; stored sessions are deletable regardless of agent", () => {
   const rows = describeProjectSessions(
     [
       {
@@ -134,6 +134,7 @@ test("describeProjectSessions: sessions of other agents are shown but disabled",
         createdAt: 0,
         updatedAt: 0,
         messageCount: 0,
+        stored: true,
       },
       {
         id: "theirs",
@@ -144,6 +145,18 @@ test("describeProjectSessions: sessions of other agents are shown but disabled",
         createdAt: 0,
         updatedAt: 0,
         messageCount: 0,
+        stored: true,
+      },
+      {
+        id: "remote-only",
+        title: "Remote only",
+        agentId: "local",
+        model: "",
+        cwd: "/project",
+        createdAt: 0,
+        updatedAt: 0,
+        messageCount: 0,
+        stored: false,
       },
     ],
     {
@@ -154,13 +167,35 @@ test("describeProjectSessions: sessions of other agents are shown but disabled",
     },
   );
 
-  assert.equal(rows[0].selectable, true);
   assert.equal(rows[0].deletable, true);
   assert.equal(rows[0].agentLabel, null);
 
-  assert.equal(rows[1].selectable, false);
-  assert.equal(rows[1].deletable, false);
+  assert.equal(rows[1].deletable, true);
   assert.equal(rows[1].agentLabel, "GitHub Copilot");
+
+  assert.equal(rows[2].deletable, true);
+  assert.equal(rows[2].agentLabel, null);
+});
+
+test("describeProjectSessions: backend-only sessions are not deletable without a backend", () => {
+  const rows = describeProjectSessions(
+    [
+      {
+        id: "remote-only",
+        title: "Remote only",
+        agentId: "local",
+        model: "",
+        cwd: "/project",
+        createdAt: 0,
+        updatedAt: 0,
+        messageCount: 0,
+        stored: false,
+      },
+    ],
+    { activeAgentId: "local" },
+  );
+
+  assert.equal(rows[0].deletable, false);
 });
 
 test("describeProjectSessions: unknown agent ids fall back to the id", () => {

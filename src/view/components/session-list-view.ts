@@ -1,6 +1,12 @@
 import type { Disposable } from "atom";
 import type { ProjectSessionRow } from "../../session/project-sessions";
-import { createElement } from "../utils";
+import { elementFromHtml, ref } from "../utils";
+import {
+  SESSION_LIST_EMPTY,
+  SESSION_LIST_PANEL,
+  SESSION_LIST_TOGGLE,
+  SESSION_ROW,
+} from "../templates/components";
 
 export interface SessionListHost {
   /** Rows to render; the host owns the data. */
@@ -28,17 +34,7 @@ export class SessionListView {
   private busy = false;
 
   constructor(private readonly host: SessionListHost) {
-    this.toggle = createElement("button", {
-      class: [
-        "pulsar-assistant-sessions-toggle",
-        "icon",
-        "icon-history",
-      ],
-      style: { display: "none" },
-    });
-    this.toggle.setAttribute("aria-label", "Sessions");
-    this.toggle.setAttribute("aria-haspopup", "true");
-    this.toggle.setAttribute("aria-expanded", "false");
+    this.toggle = elementFromHtml<HTMLButtonElement>(SESSION_LIST_TOGGLE);
     this.toggleTooltip = this.host.addTooltip(this.toggle, "Sessions");
     this.toggle.addEventListener("click", () => {
       if (this.open) {
@@ -48,19 +44,8 @@ export class SessionListView {
       }
     });
 
-    this.panel = createElement("div", {
-      class: "pulsar-assistant-sessions-list",
-      style: { display: "none" },
-    });
-    const header = createElement("div", {
-      class: "pulsar-assistant-sessions-header",
-    });
-    header.textContent = "Sessions";
-    this.rowsHost = createElement("div", {
-      class: "pulsar-assistant-sessions-rows",
-    });
-    this.panel.appendChild(header);
-    this.panel.appendChild(this.rowsHost);
+    this.panel = elementFromHtml(SESSION_LIST_PANEL);
+    this.rowsHost = ref(this.panel, "rows");
   }
 
   getToggleElement(): HTMLButtonElement {
@@ -105,18 +90,14 @@ export class SessionListView {
   refresh(): void {
     for (const tooltip of this.tooltips) tooltip.dispose();
     this.tooltips.clear();
-    this.rowsHost.innerHTML = "";
+    this.rowsHost.replaceChildren();
 
     const sessions = this.host.getSessions();
     this.available = sessions.length > 0;
     if (!this.available) this.open = false;
 
     if (sessions.length === 0) {
-      const empty = createElement("div", {
-        class: "pulsar-assistant-sessions-empty",
-      });
-      empty.textContent = "No sessions yet.";
-      this.rowsHost.appendChild(empty);
+      this.rowsHost.appendChild(elementFromHtml(SESSION_LIST_EMPTY));
       this.syncVisibility();
       return;
     }
@@ -140,72 +121,56 @@ export class SessionListView {
     session: ProjectSessionRow,
     isActive: boolean,
   ): HTMLElement {
-    const row = createElement("div", {
-      class: "pulsar-assistant-session-row",
-    });
+    const row = elementFromHtml(SESSION_ROW);
+    const entry = ref<HTMLButtonElement>(row, "entry");
+    const title = ref(row, "title");
+    const time = ref(row, "time");
+    const badge = ref(row, "agent");
+    const deleteBtn = ref<HTMLButtonElement>(row, "delete");
+
     if (isActive) row.classList.add("is-active");
-    if (!session.selectable) row.classList.add("is-foreign");
-    if (session.agentLabel) row.dataset.agent = session.agentLabel;
+    if (session.agentLabel) {
+      row.classList.add("is-foreign");
+      row.dataset.agent = session.agentLabel;
+    }
 
-    const entry = createElement("button", {
-      class: "pulsar-assistant-session-entry",
-    });
-    entry.type = "button";
     if (isActive) entry.setAttribute("aria-current", "true");
-
-    const title = createElement("span", {
-      class: "pulsar-assistant-session-title",
-    });
     title.textContent = session.title;
-    entry.appendChild(title);
 
     if (session.time) {
-      const time = createElement("span", {
-        class: "pulsar-assistant-session-time",
-      });
       time.textContent = session.time;
-      entry.appendChild(time);
+    } else {
+      time.remove();
     }
 
     if (session.agentLabel) {
-      const badge = createElement("span", {
-        class: "pulsar-assistant-session-agent",
-      });
       badge.textContent = session.agentLabel;
-      entry.appendChild(badge);
       this.tooltips.add(
         this.host.addTooltip(
           entry,
           `Other agent: ${session.agentLabel}. Switch the agent to open this session.`,
         ),
       );
-    } else if (!session.selectable) {
-      this.tooltips.add(
-        this.host.addTooltip(entry, "Start the agent to open this session."),
-      );
+    } else {
+      badge.remove();
     }
 
-    if (session.selectable && !isActive) {
+    if (!isActive) {
       entry.addEventListener("click", () =>
         this.host.onSelect(session.id, session.cwd),
       );
     } else {
       entry.disabled = true;
     }
-    row.appendChild(entry);
 
     if (session.deletable) {
-      const deleteBtn = createElement("button", {
-        class: ["pulsar-assistant-session-delete", "icon", "icon-trashcan"],
-      });
-      deleteBtn.type = "button";
-      deleteBtn.setAttribute("aria-label", "Delete session");
       this.tooltips.add(this.host.addTooltip(deleteBtn, "Delete session"));
       deleteBtn.addEventListener("click", (event) => {
         event.stopPropagation();
         this.host.onDelete(session.id, session.cwd);
       });
-      row.appendChild(deleteBtn);
+    } else {
+      deleteBtn.remove();
     }
 
     return row;

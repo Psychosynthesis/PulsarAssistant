@@ -6,7 +6,16 @@ import {
   FALLBACK_CONTEXT_WINDOW,
 } from "../token-estimate";
 import { safeProjectKey } from "../session-storage";
-import { createElement } from "./utils";
+import { elementFromHtml, ref } from "./utils";
+import {
+  CONTEXT_WINDOW_TABLE_HEAD,
+  contextWindowRowHtml,
+  MODEL_CONTEXT_WINDOWS_SECTION,
+  PROJECTS_STORAGE_MODAL_SHELL,
+  PROJECTS_STORAGE_SECTION,
+  projectStorageRowHtml,
+  PROJECTS_TABLE_HEAD,
+} from "./templates/modal";
 
 interface ProjectStorageItem {
   projectRoot: string;
@@ -15,17 +24,6 @@ interface ProjectStorageItem {
   hasTree: boolean;
   diskSizeBytes: number;
   inConfig: boolean;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return "0 B";
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${bytes} B`;
 }
 
 async function computeDirSize(dirPath: string): Promise<number> {
@@ -99,7 +97,9 @@ export class ProjectsStorageModal {
   private keydownHandler: (event: KeyboardEvent) => void;
 
   constructor() {
-    this.element = createElement("div", { class: ["pulsar-assistant-projects-modal", "overlay", "modal"] });
+    this.element = elementFromHtml(
+      `<div class="pulsar-assistant-projects-modal overlay modal"></div>`,
+    );
 
     this.keydownHandler = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -129,24 +129,12 @@ export class ProjectsStorageModal {
   }
 
   private async render(): Promise<void> {
-    this.element.innerHTML = "";
+    this.element.innerHTML = PROJECTS_STORAGE_MODAL_SHELL;
 
-    // Header
-    const header = createElement("div", { class: "pulsar-assistant-modal-header" });
-
-    const title = createElement("h2", { class: "pulsar-assistant-modal-title" });
-    title.textContent = "Pulsar Assistant: Projects & Storage";
-
-    const closeBtn = createElement("button", { class: ["btn", "btn-default", "icon", "icon-x", "pulsar-assistant-modal-close"] });
-    closeBtn.setAttribute("aria-label", "Close");
+    const closeBtn = ref<HTMLButtonElement>(this.element, "close");
     closeBtn.addEventListener("click", () => this.close());
 
-    header.appendChild(title);
-    header.appendChild(closeBtn);
-    this.element.appendChild(header);
-
-    const body = createElement("div", { class: "pulsar-assistant-modal-body" });
-    this.element.appendChild(body);
+    const body = ref(this.element, "body");
 
     // Section 1: Model Context Windows
     this.renderContextWindowsSection(body);
@@ -156,105 +144,56 @@ export class ProjectsStorageModal {
   }
 
   private renderContextWindowsSection(container: HTMLElement): void {
-    const section = createElement("div", { class: "pulsar-assistant-modal-section" });
+    const section = elementFromHtml(MODEL_CONTEXT_WINDOWS_SECTION);
 
-    const secHeader = createElement("div", { class: "pulsar-assistant-section-header" });
-
-    const title = document.createElement("h3");
-    title.textContent = "Model Context Windows";
-
-    const editBtn = createElement("button", { class: ["btn", "btn-sm"] });
-    editBtn.textContent = "Edit in config.cson\u2026";
+    const editBtn = ref<HTMLButtonElement>(section, "edit");
     editBtn.addEventListener("click", () => {
       void atom.workspace.open(atom.config.getUserConfigPath());
     });
-
-    secHeader.appendChild(title);
-    secHeader.appendChild(editBtn);
-    section.appendChild(secHeader);
-
-    const desc = createElement("p", { class: "text-muted" });
-    desc.textContent =
-      "Token context limits used for calculating dialog capacity. Add custom limits in config.cson under `pulsar-assistant.modelContextWindows`.";
-    section.appendChild(desc);
 
     const customWindows =
       (atom.config.get("pulsar-assistant.modelContextWindows") as
         | Record<string, number>
         | undefined) || {};
 
-    const tableWrap = createElement("div", { class: "pulsar-assistant-table-scroll" });
+    const tableWrap = ref(section, "table-scroll");
 
-    const table = createElement("table", { class: "pulsar-assistant-table" });
-
-    const thead = document.createElement("thead");
-    thead.innerHTML = `
-      <tr>
-        <th>Model / Family</th>
-        <th>Context Limit</th>
-        <th>Source</th>
-      </tr>
-    `;
-    table.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
+    const tbodyRows: string[] = [];
 
     // Custom items first
     for (const [name, limit] of Object.entries(customWindows)) {
       if (typeof limit === "number") {
-        const tr = createElement("tr", { class: "pulsar-assistant-table-custom-row" });
-        tr.innerHTML = `
-          <td><strong>${name}</strong></td>
-          <td>${limit.toLocaleString()} tokens</td>
-          <td><span class="badge badge-info">custom</span></td>
-        `;
-        tbody.appendChild(tr);
+        tbodyRows.push(contextWindowRowHtml(name, limit, "custom"));
       }
     }
 
     // Default items
     for (const [name, limit] of Object.entries(DEFAULT_MODEL_CONTEXT_WINDOWS)) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${name}</td>
-        <td>${limit.toLocaleString()} tokens</td>
-        <td><span class="text-muted">default</span></td>
-      `;
-      tbody.appendChild(tr);
+      tbodyRows.push(contextWindowRowHtml(name, limit, "default"));
     }
 
     // Fallback row
-    const fallbackTr = document.createElement("tr");
-    fallbackTr.innerHTML = `
-      <td><em>Fallback (other models)</em></td>
-      <td>${FALLBACK_CONTEXT_WINDOW.toLocaleString()} tokens</td>
-      <td><span class="text-muted">fallback</span></td>
-    `;
-    tbody.appendChild(fallbackTr);
+    tbodyRows.push(
+      contextWindowRowHtml(
+        "Fallback (other models)",
+        FALLBACK_CONTEXT_WINDOW,
+        "fallback",
+      ),
+    );
 
-    table.appendChild(tbody);
-    tableWrap.appendChild(table);
-    section.appendChild(tableWrap);
+    tableWrap.innerHTML = `
+      <table class="pulsar-assistant-table">
+        <thead>${CONTEXT_WINDOW_TABLE_HEAD}</thead>
+        <tbody>${tbodyRows.join("")}</tbody>
+      </table>
+    `;
 
     container.appendChild(section);
   }
 
   private async renderProjectsSection(container: HTMLElement): Promise<void> {
-    const section = createElement("div", { class: "pulsar-assistant-modal-section" });
-
-    const title = document.createElement("h3");
-    title.textContent = "Saved Projects & Storage";
-    section.appendChild(title);
-
-    const desc = createElement("p", { class: "text-muted" });
-    desc.textContent =
-      "Stored sessions, conversation history, and B-tree file indexing cache on disk.";
-    section.appendChild(desc);
-
-    const loading = createElement("div", { class: "text-muted" });
-    loading.textContent = "Scanning project storage\u2026";
-    section.appendChild(loading);
-
+    const section = elementFromHtml(PROJECTS_STORAGE_SECTION);
+    const loading = ref(section, "loading");
     container.appendChild(section);
 
     // Scan disk projects
@@ -326,56 +265,29 @@ export class ProjectsStorageModal {
     loading.remove();
 
     if (projectItems.size === 0) {
-      const empty = createElement("div", { class: "pulsar-assistant-empty-state" });
-      empty.textContent = "No stored projects or sessions found.";
-      section.appendChild(empty);
+      section.insertAdjacentHTML(
+        "beforeend",
+        '<div class="pulsar-assistant-empty-state">No stored projects or sessions found.</div>',
+      );
       return;
     }
 
-    const tableWrap = createElement("div", { class: "pulsar-assistant-table-scroll" });
+    const tableWrap = elementFromHtml(
+      '<div class="pulsar-assistant-table-scroll"></div>',
+    );
 
-    const table = createElement("table", { class: "pulsar-assistant-table" });
+    const table = elementFromHtml(
+      `<table class="pulsar-assistant-table"><thead>${PROJECTS_TABLE_HEAD}</thead></table>`,
+    );
 
-    const thead = document.createElement("thead");
-    thead.innerHTML = `
-      <tr>
-        <th>Project Root</th>
-        <th>Sessions</th>
-        <th>Tree Index</th>
-        <th>Disk Size</th>
-        <th>Actions</th>
-      </tr>
-    `;
-    table.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
-
+    const tbody = elementFromHtml("<tbody></tbody>");
     for (const item of Array.from(projectItems.values())) {
-      const row = document.createElement("tr");
+      const row = elementFromHtml(projectStorageRowHtml(item));
 
-      const tdRoot = createElement("td", { class: "pulsar-assistant-project-path" });
-      tdRoot.textContent = item.projectRoot;
-      tdRoot.title = item.projectRoot;
-      row.appendChild(tdRoot);
-
-      const tdSessions = document.createElement("td");
-      tdSessions.textContent =
-        item.sessionCount > 0 ? `${item.sessionCount} sessions` : "0";
-      row.appendChild(tdSessions);
-
-      const tdTree = document.createElement("td");
-      tdTree.textContent = item.hasTree ? "tree.json" : "\u2014";
-      row.appendChild(tdTree);
-
-      const tdSize = document.createElement("td");
-      tdSize.textContent = formatBytes(item.diskSizeBytes);
-      row.appendChild(tdSize);
-
-      const tdActions = document.createElement("td");
-      const delBtn = createElement("button", { class: ["btn", "btn-error", "btn-sm", "inline-block-tight", "icon", "icon-x"] });
-      delBtn.setAttribute("aria-label", "Delete project data");
-      delBtn.title = "Delete project data";
-
+      const tdActions = elementFromHtml("<td></td>");
+      const delBtn = elementFromHtml<HTMLButtonElement>(
+        '<button class="btn btn-error btn-sm inline-block-tight icon icon-x" aria-label="Delete project data" title="Delete project data"></button>',
+      );
       delBtn.addEventListener("click", () => {
         atom.confirm(
           {
@@ -390,7 +302,6 @@ export class ProjectsStorageModal {
           },
         );
       });
-
       tdActions.appendChild(delBtn);
       row.appendChild(tdActions);
       tbody.appendChild(row);

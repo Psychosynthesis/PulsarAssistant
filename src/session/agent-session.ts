@@ -5,6 +5,7 @@ import {
   ContextAttachment,
 } from "../util";
 import type { LaunchTarget } from "../agent-config";
+import { deleteStoredSession } from "../session-storage";
 import type { StoredContextMessage } from "../session-storage";
 import {
   listProjectSessions as listStoredProjectSessions,
@@ -366,10 +367,6 @@ export class AgentSession {
     id: string,
     cwd?: string,
   ): Promise<{ deletedActive: boolean }> {
-    if (!this.backend) throw new Error("Agent is not connected.");
-    if (!this.canDeleteSession()) {
-      throw new Error("The agent does not support deleting sessions.");
-    }
     if (this.running || this.switching) {
       throw new Error("The agent is already responding.");
     }
@@ -377,17 +374,35 @@ export class AgentSession {
     this.switching = true;
     try {
       const deletedActive = id === this.sessionId;
-      const scopedCwd =
-        cwd ?? (deletedActive ? this.backend.sessionCwd : null);
-      if (!scopedCwd) {
-        throw new Error(
-          `Refusing to delete session without a known working directory: ${id}`,
-        );
+      const backend = this.backend;
+
+      // Prefer the connected backend when it can delete, so remote state
+      // (e.g. an archived Cursor agent) is cleaned up as well.
+      if (backend && this.canDeleteSession()) {
+        const scopedCwd = cwd ?? (deletedActive ? backend.sessionCwd : null);
+        if (scopedCwd) {
+          try {
+            await this.assertSessionCwdAllowed(scopedCwd, "delete");
+            const result = await backend.deleteSession(id, scopedCwd);
+            this.refreshSessionList();
+            return result;
+          } catch {
+            // Fall through: a stored session must still be removable even
+            // when the backend refuses (e.g. an unreachable remote).
+          }
+        }
       }
-      await this.assertSessionCwdAllowed(scopedCwd, "delete");
-      const result = await this.backend.deleteSession(id, scopedCwd);
+
+      // No backend, or the backend failed: delete the stored copy directly.
+      const deleted = await deleteStoredSession(
+        this.fileTreeManager.getStorageDir(),
+        id,
+      );
+      if (!deleted) {
+        throw new Error(`Session "${id}" was not found.`);
+      }
       this.refreshSessionList();
-      return result;
+      return { deletedActive };
     } finally {
       this.switching = false;
     }

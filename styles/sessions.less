@@ -1,9 +1,13 @@
 // Extra states for the sessions panel (see src/view/components/session-list-view.ts).
 
+@import "ui-variables";
+
 .pulsar-assistant-sessions-list {
   max-height: 25vh;
   overflow-y: auto;
-  background-color: @tool-panel-background-color;
+  // Slightly lighter than the main chat background so the list reads as a
+  // distinct, raised surface instead of blending into the panel.
+  background-color: lighten(@base-background-color, 4%);
   border-bottom: 1px solid @pane-item-border-color;
   padding: (@component-padding / 4) 0;
 }
@@ -114,7 +118,7 @@
   opacity: 0.6;
 
   .pulsar-assistant-session-entry {
-    cursor: default;
+    cursor: pointer;
   }
 }
 

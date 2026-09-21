@@ -1,0 +1,45 @@
+// Shared LESS mixins for pulsar-assistant controls.
+// This file only defines mixins and intentionally emits no CSS on its own.
+
+// Keyboard focus ring for borderless controls. Buttons that already draw their
+// own focus affordance should keep it; use this for the rest.
+.pulsar-assistant-focus-ring(@offset: 1px) {
+  &:focus {
+    outline: none;
+  }
+
+  &:focus-visible {
+    outline: 1px solid @text-color-info;
+    outline-offset: @offset;
+  }
+}
+
+// Compact text field look shared by the composer and numeric inputs.
+.pulsar-assistant-input-field() {
+  font-family: inherit;
+  color: @text-color;
+  background-color: @input-background-color;
+  border: 1px solid @input-border-color;
+  border-radius: @component-border-radius;
+
+  &:focus {
+    outline: none;
+    border-color: @text-color-info;
+  }
+}
+
+// Borderless inline button shared by header/session controls.
+.pulsar-assistant-plain-button() {
+  padding: 0;
+  background: none;
+  border: none;
+  color: @text-color-subtle;
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  line-height: inherit;
+
+  &:hover {
+    color: @text-color;
+  }
+}

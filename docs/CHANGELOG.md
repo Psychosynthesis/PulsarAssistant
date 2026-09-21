@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-09-14
+
+- **Sessions are no longer tied to the active agent**: picking any session in
+  the list now starts and selects that session's agent automatically. The
+  previous "start the agent to open this session" restriction is gone — every
+  listed session is selectable, and stored sessions can be deleted without
+  launching their backend.
+- **Model list errors are visible**: failures while fetching the model list from
+  a configured URL (for example HTTP 403 on a bad token) are now rendered in the
+  chat as regular errors, including the request URL, HTTP status and response
+  body. They clear on the next request or prompt, instead of the old silent
+  "model list unavailable" state.
+- **Sessions panel styling**: the panel now uses a dark background slightly
+  lighter than the editor background, and foreign sessions are clickable.
+- **View templates extracted**: static HTML skeletons for the agent view,
+  session list, chat placeholder and projects/storage modal moved out of the
+  `createElement` chains into `src/view/templates/`. Shared DOM helpers
+  (`elementFromHtml`, `ref`, `escapeHtml`, `formatBytes`) now live in
+  `src/view/utils.ts`. No behavior change.
+- **Model selector state cleanup**: the three separate `modelList` /
+  `modelsLoading` / `modelWarning` fields were replaced with a single
+  discriminated union (`modelState`) to rule out impossible combinations. The
+  old fields remain as legacy getters until callers migrate.
+
 ## [0.7.3] - 2026-09-14
 
 - **Compact context drops tool history**: the "compact context" button now

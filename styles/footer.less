@@ -1,4 +1,5 @@
 @import "ui-variables";
+@import "_mixins";
 
 // Bottom panel: composer, slash commands, staged attachments, config options,
 // turn/delay controls, action buttons, and the pinned plan bar above it.
@@ -17,16 +18,7 @@
     margin-top: 15px;
     resize: vertical;
     padding: (@component-padding / 2);
-    font-family: inherit;
-    background-color: @input-background-color;
-    color: @text-color;
-    border: 1px solid @input-border-color;
-    border-radius: @component-border-radius;
-
-    &:focus {
-      outline: none;
-      border-color: @text-color-info;
-    }
+    .pulsar-assistant-input-field();
   }
 
   .pulsar-assistant-actions {
@@ -246,17 +238,8 @@
   input {
     width: 3.4em;
     padding: 2px 4px;
-    font-family: inherit;
     font-size: inherit;
-    color: @text-color;
-    background-color: @input-background-color;
-    border: 1px solid @input-border-color;
-    border-radius: @component-border-radius;
-
-    &:focus {
-      outline: none;
-      border-color: @text-color-info;
-    }
+    .pulsar-assistant-input-field();
 
     &:disabled {
       opacity: 0.5;

@@ -3,7 +3,8 @@ import {
   type ChatPlaceholderKind,
 } from "../empty-state-content";
 import { renderMarkdown } from "../markdown";
-import { createElement } from "../utils";
+import { elementFromHtml, ref } from "../utils";
+import { CHAT_PLACEHOLDER } from "../templates/components";
 
 export interface ChatPlaceholderOptions {
   /** Same action as the settings menu item for editing the agent config. */
@@ -24,32 +25,13 @@ export class ChatPlaceholderView {
   private kind: ChatPlaceholderKind = "hidden";
 
   constructor(private readonly options: ChatPlaceholderOptions) {
-    this.element = createElement("div", {
-      class: "pulsar-assistant-chat-placeholder",
-    });
-    this.element.style.display = "none";
-
-    const card = createElement("div", {
-      class: "pulsar-assistant-chat-placeholder-card",
-    });
-    this.titleEl = createElement("div", {
-      class: "pulsar-assistant-chat-placeholder-title",
-    });
-    this.bodyEl = createElement("div", {
-      class: "pulsar-assistant-chat-placeholder-body",
-    });
-    this.actionEl = createElement("button", {
-      class: ["btn", "btn-primary", "pulsar-assistant-chat-placeholder-action"],
-    });
-    this.actionEl.textContent = "Open agent settings";
+    this.element = elementFromHtml(CHAT_PLACEHOLDER);
+    this.titleEl = ref(this.element, "title");
+    this.bodyEl = ref(this.element, "body");
+    this.actionEl = ref<HTMLButtonElement>(this.element, "action");
     this.actionEl.addEventListener("click", () => {
       this.options.onOpenAgentSettings();
     });
-
-    card.appendChild(this.titleEl);
-    card.appendChild(this.bodyEl);
-    card.appendChild(this.actionEl);
-    this.element.appendChild(card);
   }
 
   getElement(): HTMLElement {
