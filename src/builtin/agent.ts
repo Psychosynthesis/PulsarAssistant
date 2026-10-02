@@ -25,7 +25,6 @@ import { contentBlocksToText } from "../session/prompt-text";
 import {
   API_HOST_CONTEXT_MESSAGE,
   MAX_TOOL_ITERATIONS,
-  TOOL_ARGUMENT_COMPACT_THRESHOLD,
   TOOL_OUTPUT_COMPACT_INTERVAL,
 } from "../constants";
 
@@ -152,60 +151,6 @@ function compactToolMessage(message: StoredContextMessage): boolean {
 
   if (summary.length < content.length) {
     message.content = summary;
-    if (!message.metadata) message.metadata = {};
-    message.metadata.isSummary = true;
-    return true;
-  }
-  return false;
-}
-
-/**
- * Summarizes large arguments in assistant messages (e.g. write_file / write_diff
- * payloads) to prevent context bloating. Every string field longer than
- * `threshold` characters is replaced with a placeholder.
- */
-function compactAssistantMessage(
-  message: StoredContextMessage,
-  threshold = TOOL_ARGUMENT_COMPACT_THRESHOLD,
-): boolean {
-  if (
-    message.role !== "assistant" ||
-    !message.tool_calls ||
-    message.metadata?.isSummary
-  ) {
-    return false;
-  }
-  let changed = false;
-  for (const call of message.tool_calls) {
-    const name = call.function.name;
-    if (
-      (name !== "write_file" && name !== "write_diff") ||
-      !call.function.arguments
-    ) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(call.function.arguments) as Record<
-        string,
-        unknown
-      >;
-      if (!parsed || typeof parsed !== "object") continue;
-      let modified = false;
-      for (const [field, value] of Object.entries(parsed)) {
-        if (typeof value !== "string" || value.length <= threshold) continue;
-        parsed[field] =
-          `[${field} omitted; ${countLines(value)} lines / ${value.length} characters]`;
-        modified = true;
-      }
-      if (modified) {
-        call.function.arguments = JSON.stringify(parsed);
-        changed = true;
-      }
-    } catch {
-      // Ignore JSON parse errors
-    }
-  }
-  if (changed) {
     if (!message.metadata) message.metadata = {};
     message.metadata.isSummary = true;
     return true;
@@ -523,6 +468,7 @@ export class BuiltinAgent {
           sessionId,
           update: {
             sessionUpdate: "user_message_chunk",
+            messageId: msg.id,
             content: { type: "text", text: msg.content },
           },
         });
@@ -531,6 +477,7 @@ export class BuiltinAgent {
           sessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
+            messageId: msg.id,
             content: { type: "text", text: msg.content },
           },
         });
@@ -576,6 +523,93 @@ export class BuiltinAgent {
     return this.sessions.get(sessionId)?.messages ?? [];
   }
 
+  async deleteContextItem(sessionId: string, itemId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+
+    let modified = false;
+
+    // 1. Direct message match (by stored message id)
+    const msgIndex = session.messages.findIndex((m) => m.id === itemId);
+    if (msgIndex !== -1) {
+      const msg = session.messages[msgIndex];
+      // If assistant message with tool calls, remove all responding tool messages
+      if (
+        msg.role === "assistant" &&
+        msg.tool_calls &&
+        msg.tool_calls.length > 0
+      ) {
+        const callIds = new Set(
+          msg.tool_calls.map((c) => c.id).filter(Boolean),
+        );
+        session.messages = session.messages.filter((m) => {
+          if (
+            m.role === "tool" &&
+            m.tool_call_id &&
+            callIds.has(m.tool_call_id)
+          ) {
+            session.seenToolMessages.delete(m);
+            session.grepResultSummaries.delete(m);
+            return false;
+          }
+          return true;
+        });
+      }
+      session.seenToolMessages.delete(msg);
+      session.grepResultSummaries.delete(msg);
+      session.messages.splice(msgIndex, 1);
+      modified = true;
+    } else {
+      // 2. Check if itemId matches a tool_call ID or tool_call_id in a tool message
+      let matchedToolCall = false;
+
+      // Find any assistant message containing this tool call
+      for (let i = session.messages.length - 1; i >= 0; i--) {
+        const m = session.messages[i];
+        if (m.role === "assistant" && m.tool_calls) {
+          const originalLen = m.tool_calls.length;
+          m.tool_calls = m.tool_calls.filter((c) => c.id !== itemId);
+          if (m.tool_calls.length < originalLen) {
+            matchedToolCall = true;
+            if (
+              m.tool_calls.length === 0 &&
+              (!m.content || !m.content.trim())
+            ) {
+              session.messages.splice(i, 1);
+            }
+          }
+        }
+      }
+
+      // Remove any tool message that responded to this tool call
+      const originalMsgCount = session.messages.length;
+      session.messages = session.messages.filter((m) => {
+        if (
+          m.role === "tool" &&
+          (m.tool_call_id === itemId || m.id === itemId)
+        ) {
+          matchedToolCall = true;
+          session.seenToolMessages.delete(m);
+          session.grepResultSummaries.delete(m);
+          return false;
+        }
+        return true;
+      });
+
+      if (matchedToolCall || session.messages.length < originalMsgCount) {
+        modified = true;
+      }
+    }
+
+    if (modified) {
+      session.messages = repairToolCallMessages(session.messages);
+      await this.persistSession(session);
+      return true;
+    }
+
+    return false;
+  }
+
   /**
    * Clears the conversation context down to its text messages: every tool call
    * and tool result is dropped, keeping system, user and assistant text.
@@ -610,15 +644,14 @@ export class BuiltinAgent {
     return dropToolCallHistory(session.messages);
   }
 
-  /** Summarizes seen tool outputs and oversized tool call arguments. */
+  /**
+   * Summarizes seen tool outputs only. Assistant tool-call arguments (such as
+   * write_file / write_diff payloads) are intentionally left untouched so the
+   * model can never be tricked into writing surrogate placeholder text into
+   * files.
+   */
   private applyOutputCompaction(session: SessionState): number {
-    let compactedCount = this.compactToolMessages(session);
-    for (const msg of session.messages) {
-      if (compactAssistantMessage(msg)) {
-        compactedCount++;
-      }
-    }
-    return compactedCount;
+    return this.compactToolMessages(session);
   }
 
   private compactToolMessages(session: SessionState): number {
@@ -688,7 +721,7 @@ export class BuiltinAgent {
 
     const text = contentBlocksToText(params.prompt);
     const userMessage: StoredContextMessage = {
-      id: newId(),
+      id: (params as { messageId?: string }).messageId || newId(),
       timestamp: Date.now(),
       role: "user",
       content: text || "(empty prompt)",
@@ -733,6 +766,7 @@ export class BuiltinAgent {
     for (let i = 0; i < maxIterations; i++) {
       if (signal.aborted) return { stopReason: "cancelled" };
       const messages = await this.prepareOutboundMessages(session);
+      const assistantMessageId = newId();
       let assistantText = "";
       let toolCalls: ChatToolCall[] | null = null;
       for await (const event of this.client.complete(
@@ -762,6 +796,7 @@ export class BuiltinAgent {
             sessionId,
             update: {
               sessionUpdate: "agent_message_chunk",
+              messageId: assistantMessageId,
               content: { type: "text", text: event.text },
             },
           });
@@ -775,7 +810,7 @@ export class BuiltinAgent {
       this.markSeenToolMessages(session);
       if (!toolCalls || toolCalls.length === 0) {
         session.messages.push({
-          id: newId(),
+          id: assistantMessageId,
           timestamp: Date.now(),
           role: "assistant",
           content: assistantText,
@@ -783,7 +818,7 @@ export class BuiltinAgent {
         return { stopReason: "end_turn" };
       }
       session.messages.push({
-        id: newId(),
+        id: assistantMessageId,
         timestamp: Date.now(),
         role: "assistant",
         content: assistantText || null,
@@ -844,7 +879,10 @@ export class BuiltinAgent {
     try {
       await this.handleToolCallInner(sessionId, session, call, signal);
     } finally {
-      if (session.toolRequestCount >= TOOL_OUTPUT_COMPACT_INTERVAL) {
+      const compactInterval =
+        this.getPolicy().toolOutputCompactInterval ??
+        TOOL_OUTPUT_COMPACT_INTERVAL;
+      if (compactInterval > 0 && session.toolRequestCount >= compactInterval) {
         session.toolRequestCount = 0;
         // Applied before the next request rather than here: the assistant
         // message that carries these calls may still have unexecuted calls whose

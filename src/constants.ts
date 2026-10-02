@@ -8,13 +8,15 @@ export const AUTH_REQUIRED_CODE = -32000;
 
 export const MAX_TOOL_ITERATIONS = 200; // This is default
 
-export const TOOL_OUTPUT_COMPACT_INTERVAL = 20;
-
 /**
- * Tool arguments (write_file / write_diff payloads) longer than this many
- * characters are replaced with a placeholder during context compaction.
+ * Context output compaction interval (in number of tool calls).
+ * When this many tool calls have executed in a session, older verbose tool
+ * outputs (such as read_file and grep results) are automatically compacted in
+ * context to conserve token limits during long sessions. Only tool outputs are
+ * compacted; assistant tool-call arguments are never rewritten.
+ * Set to 0 to disable automatic compaction.
  */
-export const TOOL_ARGUMENT_COMPACT_THRESHOLD = 1000;
+export const TOOL_OUTPUT_COMPACT_INTERVAL = 30;
 
 export const HOST_CONTEXT_START = "<pulsar-assistant-host-context>";
 export const HOST_CONTEXT_END = "</pulsar-assistant-host-context>";

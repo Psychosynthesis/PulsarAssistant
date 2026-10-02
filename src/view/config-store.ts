@@ -59,7 +59,12 @@ export function readProjectPolicy(projectRoot: string): ProjectPolicy {
 
 function writeProjectPolicyField(
   projectRoot: string,
-  field: "testCommand" | "buildCommand" | "maxTurnRequests" | "toolCallDelayMs",
+  field:
+    | "testCommand"
+    | "buildCommand"
+    | "maxTurnRequests"
+    | "toolCallDelayMs"
+    | "toolOutputCompactInterval",
   value: string | number | null,
 ): void {
   const raw = atom.config.get(CFG_PROJECTS);
@@ -123,10 +128,16 @@ export function initModelContextWindows(): void {
     });
   }
 }
-
 export function setProjectToolCallDelay(
   projectRoot: string,
   value: number | null,
 ): void {
   writeProjectPolicyField(projectRoot, "toolCallDelayMs", value);
+}
+
+export function setProjectToolOutputCompactInterval(
+  projectRoot: string,
+  value: number | null,
+): void {
+  writeProjectPolicyField(projectRoot, "toolOutputCompactInterval", value);
 }

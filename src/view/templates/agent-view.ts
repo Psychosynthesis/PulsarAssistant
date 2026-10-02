@@ -18,7 +18,14 @@ export const TOOL_DELAY_CONTROL = `
   </div>
 `;
 
-export function slashComposerHtml(menuId: string): string {
+export const COMPACT_INTERVAL_CONTROL = `
+  <div class="pulsar-assistant-turn-limit pulsar-assistant-compact-interval">
+    <label for="pulsar-assistant-compact-interval-input" title="Compact tool outputs in context every N tool calls to conserve tokens (0 to disable)">Compact (calls)</label>
+    <input id="pulsar-assistant-compact-interval-input" data-ref="input" type="number" min="0" max="1000" step="5" placeholder="30" title="Compact tool outputs in context every N tool calls to conserve tokens (0 to disable)">
+  </div>
+`;
+
+export function slashWrapTemplate(menuId: string): string {
   return `
     <div class="pulsar-assistant-slash-wrap">
       <div class="pulsar-assistant-picker-menu pulsar-assistant-slash-menu" data-ref="menu" id="${menuId}" role="listbox" aria-label="Slash commands" style="display:none"></div>

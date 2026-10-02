@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.5] - 2026-09-21
+
+- **Write tools reject systemic placeholders**: `write_file` and `write_diff`
+  now refuse `content` / `replace` / `replaceText` / `search` / `searchText`
+  that contain a systemic omission/compaction marker (`[result omitted …]`,
+  `[output omitted …]`, `[content omitted …]`, `[SYSTEM NOTE …]`), so the model
+  can never write placeholder text into files. The detection regex is anchored
+  to the exact host-injected phrases to avoid false positives in code comments.
+- **Compaction no longer touches write arguments**: `compactContext` now
+  compresses only `role === "tool"` outputs. The previous behaviour of replacing
+  oversized `write_file` / `write_diff` arguments inside assistant messages with
+  placeholders (and the `TOOL_ARGUMENT_COMPACT_THRESHOLD` constant) is removed —
+  this was the root cause of corrupted file writes.
+- **Reasoning status for Gemini and `<think>`/`<thought>` models**: reasoning is
+  now extracted from `thought: true` Gemini-style payloads, `reasoning_content`,
+  `thinking`, and inline `<think>`/`<thought>` tags (both streaming and
+  non-streaming), and shown in the composer status line. Leftover blank lines
+  from stripped tags are collapsed.
+- **Manual context deletion**: messages and individual tool calls can now be
+  removed from the conversation via a trash button on each message header and
+  tool call heading. Removing an assistant message also removes its paired tool
+  results, and removing a tool call removes its tool result; the history is
+  repaired before saving so the API never receives dangling tool calls.
+- **Per-project tool-output compaction interval**: `toolOutputCompactInterval`
+  is exposed in the footer next to the tool-call delay (as `Compact (calls)`),
+  honouring `0` to disable automatic tool-output compaction.
+- **Footer layout**: the fixed footer grid columns were replaced with a
+  wrapping flex layout, so controls flow onto as many rows as they need.
+
 ## [0.7.4] - 2026-09-14
 
 - **Sessions are no longer tied to the active agent**: picking any session in

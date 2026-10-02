@@ -128,11 +128,18 @@ export class BuiltinBackend implements AgentBackend {
     throw new Error("API agents do not have ACP session config options.");
   }
 
-  async prompt(prompt: acp.ContentBlock[]): Promise<acp.PromptResponse> {
+  async prompt(
+    prompt: acp.ContentBlock[],
+    userMessageId?: string,
+  ): Promise<acp.PromptResponse> {
     if (!this.builtin || !this.sessionId) {
       throw new Error("Agent session is not ready.");
     }
-    return this.builtin.prompt({ sessionId: this.sessionId, prompt });
+    return this.builtin.prompt({
+      sessionId: this.sessionId,
+      prompt,
+      messageId: userMessageId,
+    } as acp.PromptRequest & { messageId?: string });
   }
 
   cancel(): void {
@@ -206,6 +213,11 @@ export class BuiltinBackend implements AgentBackend {
     const id = sessionId ?? this.sessionId;
     if (!this.builtin || !id) return { compactedCount: 0 };
     return this.builtin.compactContext(id);
+  }
+
+  async deleteContextItem(itemId: string): Promise<boolean> {
+    if (!this.builtin || !this.sessionId) return false;
+    return await this.builtin.deleteContextItem(this.sessionId, itemId);
   }
 
   dispose(): void {

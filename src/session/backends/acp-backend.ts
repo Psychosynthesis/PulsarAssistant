@@ -460,7 +460,10 @@ export class AcpCliBackend implements AgentBackend {
     }
   }
 
-  async prompt(prompt: acp.ContentBlock[]): Promise<acp.PromptResponse> {
+  async prompt(
+    prompt: acp.ContentBlock[],
+    _userMessageId?: string,
+  ): Promise<acp.PromptResponse> {
     if (!this.connection || !this.sessionId) {
       throw new Error("Agent session is not ready.");
     }

@@ -31,6 +31,7 @@ import {
   setProjectBuildCommand,
   setProjectTestCommand,
   setProjectToolCallDelay,
+  setProjectToolOutputCompactInterval,
 } from "./config-store";
 import {
   ConfigSelector,
@@ -75,8 +76,9 @@ import {
   ref,
 } from "./utils";
 import {
+  COMPACT_INTERVAL_CONTROL,
   CONFIG_SELECTORS,
-  slashComposerHtml,
+  slashWrapTemplate,
   TOOL_DELAY_CONTROL,
   TURN_LIMIT_CONTROL,
 } from "./templates/agent-view";
@@ -117,6 +119,11 @@ type ModelState =
   | { status: "loading" }
   | { status: "ready"; models: ModelInfo[] }
   | { status: "warning" };
+
+function newMessageId(): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `msg_${Date.now().toString(36)}_${rand}`;
+}
 
 function flattenInfoRows(
   value: unknown,
@@ -185,6 +192,7 @@ export class PulsarAssistantView {
   private autoApprovePermissions = false;
   private maxTurnRequestsInput!: HTMLInputElement;
   private toolCallDelayInput!: HTMLInputElement;
+  private compactIntervalInput!: HTMLInputElement;
   private followButton!: HTMLButtonElement;
   private followAgent = false;
   private followTargetPath: string | null = null;
@@ -293,6 +301,8 @@ export class PulsarAssistantView {
       addTooltipDisposable: (d) => self.conversationTooltips.add(d),
       onBeforeNewToolCall: () => self.endStreamingBlocks(),
       scrollToBottom: () => self.scrollToBottom(),
+      onDeleteToolCall: (toolCallId) =>
+        void self.handleDeleteItem("tool_call", toolCallId),
     });
 
     this.permissionManager = new PermissionManager({
@@ -390,6 +400,7 @@ export class PulsarAssistantView {
     this.renderLiveRow();
     this.refreshTurnLimitInput();
     this.refreshToolDelayInput();
+    this.refreshCompactIntervalInput();
 
     this.ensureStarted();
   }
@@ -1021,6 +1032,7 @@ export class PulsarAssistantView {
     actions.appendChild(this.buildConfigSelectors());
     actions.appendChild(this.buildTurnLimitControl());
     actions.appendChild(this.buildToolDelayControl());
+    actions.appendChild(this.buildCompactIntervalControl());
     actions.appendChild(this.autoApproveButton);
 
     const actionButtons = createElement("div", { class: "pulsar-assistant-action-buttons" });
@@ -1179,6 +1191,51 @@ export class PulsarAssistantView {
     }
     setProjectToolCallDelay(this.projectRoot, value);
     this.refreshToolDelayInput();
+  }
+
+  private buildCompactIntervalControl(): HTMLElement {
+    const wrap = elementFromHtml(COMPACT_INTERVAL_CONTROL);
+    this.compactIntervalInput = ref<HTMLInputElement>(wrap, "input");
+    this.compactIntervalInput.addEventListener("change", () => {
+      this.saveCompactInterval();
+    });
+
+    this.subscriptions.add(
+      atom.tooltips.add(wrap, {
+        title:
+          "Compact older tool outputs in context every N tool calls to conserve tokens. 0 disables automatic compaction. Empty uses the default (30).",
+        placement: "top",
+        trigger: "hover",
+      }),
+    );
+
+    return wrap;
+  }
+
+  private refreshCompactIntervalInput(): void {
+    if (!this.compactIntervalInput) return;
+    const policy = readProjectPolicy(this.projectRoot);
+    this.compactIntervalInput.value =
+      policy.toolOutputCompactInterval == null
+        ? ""
+        : String(policy.toolOutputCompactInterval);
+  }
+
+  private saveCompactInterval(): void {
+    const raw = this.compactIntervalInput.value.trim();
+    if (!raw) {
+      setProjectToolOutputCompactInterval(this.projectRoot, null);
+      this.refreshCompactIntervalInput();
+      return;
+    }
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 0) {
+      this.refreshCompactIntervalInput();
+      this.appendError("Compact interval must be an integer >= 0.");
+      return;
+    }
+    setProjectToolOutputCompactInterval(this.projectRoot, value);
+    this.refreshCompactIntervalInput();
   }
 
   private closeAllConfigMenus(): void {
@@ -1523,7 +1580,7 @@ export class PulsarAssistantView {
   }
 
   private buildSlashComposer(): HTMLElement {
-    const wrap = elementFromHtml(slashComposerHtml(this.slashMenuId));
+    const wrap = elementFromHtml(slashWrapTemplate(this.slashMenuId));
 
     this.slashMenu = ref(wrap, "menu");
     this.slashHint = ref(wrap, "hint");
@@ -1710,13 +1767,14 @@ export class PulsarAssistantView {
     this.clearModelsErrors();
     this.updateContextProgress();
     this.updateInputControls();
-    this.appendUserMessage(text, context);
+    const userMessageId = newMessageId();
+    this.appendUserMessage(text, context, userMessageId);
     this.endStreamingBlocks();
     this.userEchoSkipCount++;
     this.sendButton.disabled = true;
 
     this.session
-      .prompt(text, context)
+      .prompt(text, context, userMessageId)
       .catch((error) => {
         if (this.session !== currentSession) return;
         this.userEchoSkipCount--;
@@ -2462,7 +2520,7 @@ export class PulsarAssistantView {
       !this.streamBody
     ) {
       this.endStreamingBlocks();
-      this.streamBody = this.appendMessage(role, "");
+      this.streamBody = this.appendMessage(role, "", streamMessageId);
       this.streamRole = role;
       this.streamMessageId = streamMessageId;
     }
@@ -2505,8 +2563,19 @@ export class PulsarAssistantView {
     el.classList.add("pulsar-assistant-markdown");
   }
 
-  private appendMessage(role: string, text: string): HTMLElement {
+  private appendMessage(
+    role: string,
+    text: string,
+    messageId?: string | null,
+  ): HTMLElement {
     const message = createElement("div", { class: ["pulsar-assistant-message", `pulsar-assistant-message--${role}`] });
+    if (messageId) {
+      message.dataset.messageId = messageId;
+    }
+
+    const header = createElement("div", {
+      class: "pulsar-assistant-message-header",
+    });
 
     const label = createElement("div", { class: "pulsar-assistant-message-role" });
     const labels: Record<string, string> = {
@@ -2517,10 +2586,15 @@ export class PulsarAssistantView {
     };
     label.textContent = labels[role] || role;
 
+    header.appendChild(label);
+    if (messageId && (role === "user" || role === "agent")) {
+      header.appendChild(this.buildDeleteButton("message", messageId));
+    }
+
     const body = createElement("div", { class: "pulsar-assistant-message-body" });
     body.textContent = text;
 
-    message.appendChild(label);
+    message.appendChild(header);
     message.appendChild(body);
     this.conversation.appendChild(message);
     this.scrollToBottom();
@@ -2530,8 +2604,9 @@ export class PulsarAssistantView {
   private appendUserMessage(
     text: string,
     context: MaterializedContext[] = [],
+    userMessageId?: string,
   ): void {
-    const body = this.appendMessage("user", text);
+    const body = this.appendMessage("user", text, userMessageId);
     this.renderMarkdown(body, text);
     if (context.length > 0) {
       const strip = createElement("div", { class: "pulsar-assistant-message-context" });
@@ -2540,6 +2615,68 @@ export class PulsarAssistantView {
       }
       body.appendChild(strip);
     }
+  }
+
+  private buildDeleteButton(
+    kind: "message" | "tool_call",
+    id: string,
+  ): HTMLButtonElement {
+    const button = createElement("button", {
+      class: ["icon", "icon-trashcan", "pulsar-assistant-item-delete"],
+    }) as HTMLButtonElement;
+    button.type = "button";
+    button.title = "Delete from context";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void this.handleDeleteItem(kind, id);
+    });
+    return button;
+  }
+
+  private findItemElement(
+    kind: "message" | "tool_call",
+    id: string,
+  ): HTMLElement | null {
+    const selector =
+      kind === "message"
+        ? ".pulsar-assistant-message"
+        : ".pulsar-assistant-tool";
+    const attribute =
+      kind === "message" ? "messageId" : "toolCallId";
+    for (const el of this.conversation.querySelectorAll<HTMLElement>(
+      selector,
+    )) {
+      if (el.dataset[attribute] === id) return el;
+    }
+    return null;
+  }
+
+  private async handleDeleteItem(
+    kind: "message" | "tool_call",
+    id: string,
+  ): Promise<void> {
+    if (!this.session) return;
+    let removed: boolean;
+    try {
+      removed = await this.session.deleteContextItem(id);
+    } catch {
+      removed = false;
+    }
+    if (!removed) {
+      this.appendError(
+        "Could not delete this context item. It may not be supported by the current session.",
+      );
+      return;
+    }
+    if (kind === "tool_call") {
+      // removeToolView disposes the tooltip and removes both the DOM element
+      // and its entry from the tool view map.
+      this.toolCallManager.removeToolView(id);
+    } else {
+      this.findItemElement("message", id)?.remove();
+    }
+    this.updateContextProgress();
+    this.updateChatPlaceholder();
   }
 
   /** Thin wrappers keeping the file helpers aware of the project roots. */

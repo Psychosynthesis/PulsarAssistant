@@ -642,6 +642,33 @@ async function readFileTool(
   return { output: result.content ?? "" };
 }
 
+/**
+ * Matches systemic placeholders injected into conversation history, e.g.
+ * `[read_file result omitted from history; ...]`,
+ * `[grep result omitted from history; ...]`,
+ * `[... output omitted from history ...]`,
+ * `[SYSTEM NOTE: ...]`.
+ *
+ * The match is constrained to a single `[...]` span (no `]` inside) and to the
+ * exact phrases the host injects. This avoids false positives when real code
+ * mentions "omitted" inside brackets in a comment or string.
+ */
+const SYSTEMIC_MARKER_REGEX =
+  /\[[^\]]*?(?:result omitted|output omitted|content omitted|SYSTEM NOTE)[^\]]*?\]/i;
+
+function assertNoSystemicMarker(
+  value: string | undefined,
+  fieldName: string,
+): void {
+  if (!value) return;
+  const match = value.match(SYSTEMIC_MARKER_REGEX);
+  if (match) {
+    throw new Error(
+      `Cannot write file: contains systemic omission/compaction marker (${match[0]}). Provide actual code, do not write omitted markers into files.`,
+    );
+  }
+}
+
 async function writeFileTool(
   conn: BuiltinHost,
   sessionId: string,
@@ -654,6 +681,10 @@ async function writeFileTool(
   const fullContent = stringArg(args, "content");
   const searchText = stringArg(args, "searchText");
   const replaceText = stringArg(args, "replaceText");
+
+  assertNoSystemicMarker(fullContent, "content");
+  assertNoSystemicMarker(searchText, "searchText");
+  assertNoSystemicMarker(replaceText, "replaceText");
 
   if (fullContent !== undefined && searchText !== undefined) {
     throw new Error(
@@ -726,6 +757,9 @@ async function writeDiffTool(
   const startLine = intArg(args, "startLine");
   const endLine = intArg(args, "endLine") ?? startLine;
   const search = stringArg(args, "search") ?? stringArg(args, "searchText");
+
+  assertNoSystemicMarker(replaceText, "replace");
+  assertNoSystemicMarker(search, "search");
 
   let newContent: string;
   let summary: string;

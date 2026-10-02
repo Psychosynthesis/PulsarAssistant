@@ -229,6 +229,7 @@ export class AgentSession {
   async prompt(
     text: string,
     attachments: ContextAttachment[] = [],
+    userMessageId?: string,
   ): Promise<acp.PromptResponse> {
     if (this.running) {
       throw new Error("The agent is already responding.");
@@ -260,7 +261,7 @@ export class AgentSession {
         blocks.push({ type: "text", text });
       }
 
-      response = await this.backend.prompt(blocks);
+      response = await this.backend.prompt(blocks, userMessageId);
       this.refreshSessionList();
       return response;
     } finally {
@@ -496,6 +497,13 @@ export class AgentSession {
       return this.backend.compactContext();
     }
     return { compactedCount: 0 };
+  }
+
+  async deleteContextItem(itemId: string): Promise<boolean> {
+    if (this.backend?.deleteContextItem) {
+      return await this.backend.deleteContextItem(itemId);
+    }
+    return false;
   }
 
   dispose(): void {

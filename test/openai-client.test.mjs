@@ -133,6 +133,132 @@ test("OpenAiChatClient: stream path accepts CRLF SSE", async () => {
   ]);
 });
 
+test("OpenAiChatClient: non-stream emits Gemini thought:true as thought, not text", async () => {
+  const fetchImpl = async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: { content: "reasoning trace", thought: true },
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.example/v1",
+    apiKey: "k",
+    stream: false,
+    fetch: fetchImpl,
+  });
+  const events = [];
+  for await (const event of client.complete(
+    { model: "gemini", messages: [] },
+    new AbortController().signal,
+  )) {
+    events.push(event);
+  }
+  assert.deepEqual(events, [
+    { type: "thought", text: "reasoning trace" },
+    { type: "done", finishReason: "stop" },
+  ]);
+});
+
+test("OpenAiChatClient: non-stream extracts <think>/<thought> tags into thought", async () => {
+  const fetchImpl = async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content: "<think>step one</think>\n\n<thought>step two</thought>\nfinal answer",
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.example/v1",
+    apiKey: "k",
+    stream: false,
+    fetch: fetchImpl,
+  });
+  const events = [];
+  for await (const event of client.complete(
+    { model: "dev", messages: [] },
+    new AbortController().signal,
+  )) {
+    events.push(event);
+  }
+  assert.deepEqual(events, [
+    { type: "thought", text: "step one\nstep two" },
+    { type: "text", text: "final answer" },
+    { type: "done", finishReason: "stop" },
+  ]);
+});
+
+test("OpenAiChatClient: stream emits Gemini thought:true delta as thought", async () => {
+  const sse = [
+    'data: {"choices":[{"delta":{"thought":true,"content":"reasoning"}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"final"}}]}\n\n',
+    "data: [DONE]\n\n",
+  ].join("");
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.example/v1",
+    apiKey: "k",
+    stream: true,
+    fetch: async () =>
+      new Response(sse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+  });
+  const events = [];
+  for await (const event of client.complete(
+    { model: "gemini", messages: [] },
+    new AbortController().signal,
+  )) {
+    events.push(event);
+  }
+  assert.deepEqual(events, [
+    { type: "thought", text: "reasoning" },
+    { type: "text", text: "final" },
+    { type: "done", finishReason: "stop" },
+  ]);
+});
+
+test("OpenAiChatClient: stream splits <think>/<thought> tags from content", async () => {
+  const sse = [
+    'data: {"choices":[{"delta":{"content":"<think>step</think> final"}}]}\n\n',
+    "data: [DONE]\n\n",
+  ].join("");
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.example/v1",
+    apiKey: "k",
+    stream: true,
+    fetch: async () =>
+      new Response(sse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+  });
+  const events = [];
+  for await (const event of client.complete(
+    { model: "dev", messages: [] },
+    new AbortController().signal,
+  )) {
+    events.push(event);
+  }
+  assert.deepEqual(events, [
+    { type: "thought", text: "step" },
+    { type: "text", text: " final" },
+    { type: "done", finishReason: "stop" },
+  ]);
+});
+
 test("fetchOpenAiModels: uses the default /models endpoint", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(url, "https://api.example/v1/models");

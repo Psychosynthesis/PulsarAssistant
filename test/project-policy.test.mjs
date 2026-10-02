@@ -11,6 +11,7 @@ test("resolveProjectPolicy: denies when projects is missing", () => {
     buildCommand: null,
     maxTurnRequests: null,
     toolCallDelayMs: null,
+    toolOutputCompactInterval: null,
   });
 });
 
@@ -24,6 +25,7 @@ test("resolveProjectPolicy: matches a configured project root", () => {
   assert.equal(policy.buildCommand, "npm run build");
   assert.equal(policy.maxTurnRequests, null);
   assert.equal(policy.toolCallDelayMs, null);
+  assert.equal(policy.toolOutputCompactInterval, null);
 });
 
 test("resolveProjectPolicy: reads buildCommand", () => {
@@ -95,6 +97,30 @@ test("resolveProjectPolicy: does not match a sibling folder", () => {
   assert.equal(policy.buildCommand, null);
   assert.equal(policy.maxTurnRequests, null);
   assert.equal(policy.toolCallDelayMs, null);
+  assert.equal(policy.toolOutputCompactInterval, null);
+});
+
+test("resolveProjectPolicy: reads a non-negative toolOutputCompactInterval (including 0)", () => {
+  const root = path.resolve("/tmp/app");
+  const policy0 = resolveProjectPolicy(root, {
+    [root]: { toolOutputCompactInterval: 0 },
+  });
+  assert.equal(policy0.toolOutputCompactInterval, 0);
+
+  const policy15 = resolveProjectPolicy(root, {
+    [root]: { toolOutputCompactInterval: 15 },
+  });
+  assert.equal(policy15.toolOutputCompactInterval, 15);
+});
+
+test("resolveProjectPolicy: ignores invalid toolOutputCompactInterval", () => {
+  const root = path.resolve("/tmp/app");
+  for (const value of [-1, 1.5, "15", null, undefined, -10]) {
+    const policy = resolveProjectPolicy(root, {
+      [root]: { toolOutputCompactInterval: value },
+    });
+    assert.equal(policy.toolOutputCompactInterval, null);
+  }
 });
 
 test("resolveProjectPolicy: matches equivalent path forms", () => {

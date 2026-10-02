@@ -220,6 +220,40 @@
   margin-top: (@component-padding / 2);
 }
 
+.pulsar-assistant-message-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: @component-padding;
+}
+
+.pulsar-assistant-item-delete {
+  flex: 0 0 auto;
+  opacity: 0;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  margin: 0;
+  color: @text-color-subtle;
+  cursor: pointer;
+  line-height: 1;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.pulsar-assistant-message:hover .pulsar-assistant-item-delete,
+.pulsar-assistant-tool:hover .pulsar-assistant-item-delete {
+  opacity: 0.6;
+}
+
+// Same specificity as the container-hover rule above (two classes + a
+// pseudo-class) but declared after it, so hovering the trash button itself
+// wins and shows the full-strength error color.
+.pulsar-assistant-message .pulsar-assistant-item-delete:hover,
+.pulsar-assistant-tool .pulsar-assistant-item-delete:hover {
+  color: @text-color-error;
+  opacity: 1;
+}
+
 .pulsar-assistant-tool {
   min-width: 0;
   background: rgba(200, 200, 200, 0.05);

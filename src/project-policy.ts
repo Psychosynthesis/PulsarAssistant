@@ -12,6 +12,7 @@ export type ProjectPolicy = {
   buildCommand: string | null;
   maxTurnRequests: number | null;
   toolCallDelayMs: number | null;
+  toolOutputCompactInterval: number | null;
 };
 
 const DENY: ProjectPolicy = {
@@ -20,6 +21,7 @@ const DENY: ProjectPolicy = {
   buildCommand: null,
   maxTurnRequests: null,
   toolCallDelayMs: null,
+  toolOutputCompactInterval: null,
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -44,6 +46,18 @@ function positiveInt(value: unknown): number | null {
   return value;
 }
 
+function nonNegativeInt(value: unknown): number | null {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value < 0
+  ) {
+    return null;
+  }
+  return value;
+}
+
 export function resolveProjectPolicy(
   projectRoot: string,
   projects: unknown,
@@ -58,6 +72,7 @@ export function resolveProjectPolicy(
       buildCommand: optionalString(value.buildCommand) ?? null,
       maxTurnRequests: positiveInt(value.maxTurnRequests),
       toolCallDelayMs: positiveInt(value.toolCallDelayMs),
+      toolOutputCompactInterval: nonNegativeInt(value.toolOutputCompactInterval),
     };
   }
   return DENY;

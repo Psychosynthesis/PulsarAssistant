@@ -15,7 +15,10 @@ export interface AgentBackend {
   sessionCwd: string | null;
 
   start(cwd: string): Promise<BackendInitResult>;
-  prompt(prompt: acp.ContentBlock[]): Promise<acp.PromptResponse>;
+  prompt(
+    prompt: acp.ContentBlock[],
+    userMessageId?: string,
+  ): Promise<acp.PromptResponse>;
   cancel(): void;
 
   newSession(cwd: string): Promise<acp.NewSessionResponse>;
@@ -39,6 +42,7 @@ export interface AgentBackend {
 
   getSessionMessages?(): StoredContextMessage[];
   compactContext?(): Promise<{ compactedCount: number; deferred?: boolean }>;
+  deleteContextItem?(itemId: string): Promise<boolean>;
 
   dispose(): void;
 }

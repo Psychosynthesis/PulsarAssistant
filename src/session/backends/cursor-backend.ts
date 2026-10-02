@@ -368,7 +368,10 @@ export class CursorBackend implements AgentBackend {
     this.target = { ...this.target, model };
   }
 
-  async prompt(prompt: acp.ContentBlock[]): Promise<acp.PromptResponse> {
+  async prompt(
+    prompt: acp.ContentBlock[],
+    _userMessageId?: string,
+  ): Promise<acp.PromptResponse> {
     if (!this.client || !this.state || !this.sessionId) {
       throw new Error("Agent session is not ready.");
     }

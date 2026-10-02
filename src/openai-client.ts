@@ -102,6 +102,145 @@ type ModelsResponse = {
   error?: { message?: string };
 };
 
+function extractReasoning(obj: Record<string, unknown> | undefined): {
+  reasoningText: string | null;
+  consumeContent: boolean;
+} {
+  if (!obj || typeof obj !== "object") {
+    return { reasoningText: null, consumeContent: false };
+  }
+
+  const candidateKeys = [
+    "reasoning_content",
+    "reasoning",
+    "thinking",
+    "thinking_process",
+    "reasoningContent",
+    "thought_content",
+    "thoughtContent",
+  ];
+  for (const key of candidateKeys) {
+    const val = obj[key];
+    if (typeof val === "string" && val.length > 0) {
+      return { reasoningText: val, consumeContent: false };
+    }
+    if (val && typeof val === "object") {
+      const textVal =
+        (val as { text?: unknown; content?: unknown }).text ??
+        (val as { text?: unknown; content?: unknown }).content;
+      if (typeof textVal === "string" && textVal.length > 0) {
+        return { reasoningText: textVal, consumeContent: false };
+      }
+    }
+  }
+
+  if (typeof obj.thought === "string" && obj.thought.length > 0) {
+    return { reasoningText: obj.thought, consumeContent: false };
+  }
+  if (obj.thought === true) {
+    const thoughtText =
+      typeof obj.content === "string"
+        ? obj.content
+        : typeof obj.text === "string"
+          ? obj.text
+          : null;
+    return { reasoningText: thoughtText, consumeContent: true };
+  }
+
+  if (Array.isArray(obj.parts)) {
+    const thoughtParts: string[] = [];
+    for (const part of obj.parts) {
+      if (part && typeof part === "object") {
+        const p = part as Record<string, unknown>;
+        if (typeof p.thought === "string") {
+          thoughtParts.push(p.thought);
+        } else if (p.thought === true) {
+          if (typeof p.text === "string") thoughtParts.push(p.text);
+          else if (typeof p.content === "string") thoughtParts.push(p.content);
+        }
+      }
+    }
+    if (thoughtParts.length > 0) {
+      return { reasoningText: thoughtParts.join(""), consumeContent: false };
+    }
+  }
+
+  return { reasoningText: null, consumeContent: false };
+}
+
+class StreamingTagFilter {
+  private inTag = false;
+  private buffer = "";
+
+  process(chunk: string): Array<{ type: "thought" | "text"; text: string }> {
+    const results: Array<{ type: "thought" | "text"; text: string }> = [];
+    this.buffer += chunk;
+
+    while (this.buffer.length > 0) {
+      if (!this.inTag) {
+        const match = this.buffer.match(/<(think|thought)>/i);
+        if (match && match.index !== undefined) {
+          const textBefore = this.buffer.slice(0, match.index);
+          if (textBefore.length > 0) {
+            results.push({ type: "text", text: textBefore });
+          }
+          this.inTag = true;
+          this.buffer = this.buffer.slice(match.index + match[0].length);
+        } else {
+          const partialMatch = this.buffer.match(/<[a-z]{0,7}$/i);
+          if (partialMatch && partialMatch.index !== undefined) {
+            const safeText = this.buffer.slice(0, partialMatch.index);
+            if (safeText.length > 0) {
+              results.push({ type: "text", text: safeText });
+            }
+            this.buffer = this.buffer.slice(partialMatch.index);
+            break;
+          } else {
+            results.push({ type: "text", text: this.buffer });
+            this.buffer = "";
+          }
+        }
+      } else {
+        const match = this.buffer.match(/<\/(think|thought)>/i);
+        if (match && match.index !== undefined) {
+          const thoughtBefore = this.buffer.slice(0, match.index);
+          if (thoughtBefore.length > 0) {
+            results.push({ type: "thought", text: thoughtBefore });
+          }
+          this.inTag = false;
+          this.buffer = this.buffer.slice(match.index + match[0].length);
+        } else {
+          const partialMatch = this.buffer.match(/<\/[a-z]{0,7}$/i);
+          if (partialMatch && partialMatch.index !== undefined) {
+            const safeThought = this.buffer.slice(0, partialMatch.index);
+            if (safeThought.length > 0) {
+              results.push({ type: "thought", text: safeThought });
+            }
+            this.buffer = this.buffer.slice(partialMatch.index);
+            break;
+          } else {
+            results.push({ type: "thought", text: this.buffer });
+            this.buffer = "";
+          }
+        }
+      }
+    }
+    return results;
+  }
+
+  flush(): Array<{ type: "thought" | "text"; text: string }> {
+    const results: Array<{ type: "thought" | "text"; text: string }> = [];
+    if (this.buffer.length > 0) {
+      results.push({
+        type: this.inTag ? "thought" : "text",
+        text: this.buffer,
+      });
+      this.buffer = "";
+    }
+    return results;
+  }
+}
+
 function boundFetch(
   ...args: Parameters<typeof fetch>
 ): Promise<Response> {
@@ -215,15 +354,38 @@ export class OpenAiChatClient {
     }
     const choice = parsed.choices?.[0];
     const message = choice?.message;
-    const reasoning =
-      message?.reasoning_content ||
-      message?.thought ||
-      message?.thinking ||
-      message?.reasoning;
+    const reasoningInfo = extractReasoning(
+      message as Record<string, unknown> | undefined,
+    );
+    let reasoning = reasoningInfo.reasoningText;
+    let content = reasoningInfo.consumeContent
+      ? ""
+      : (message?.content ?? "");
+
+    const inlineThinkRegex = /<(think|thought)>([\s\S]*?)<\/\1>/gi;
+    const tagThoughts: string[] = [];
+    content = content
+      .replace(inlineThinkRegex, (_: string, _tag: string, match: string) => {
+        tagThoughts.push(match);
+        return "";
+      })
+      // Removing a tag can leave behind stray blank lines (the tag was often
+      // the only thing on its line). Collapse runs of 3+ newlines into a single
+      // blank line and strip the leading/trailing whitespace.
+      .replace(/[ \t]*\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n")
+      .trim();
+
+    if (tagThoughts.length > 0) {
+      const combinedTagThought = tagThoughts.join("\n");
+      reasoning = reasoning
+        ? `${reasoning}\n${combinedTagThought}`
+        : combinedTagThought;
+    }
+
     if (reasoning) {
       yield { type: "thought", text: reasoning };
     }
-    if (message?.content) yield { type: "text", text: message.content };
+    if (content) yield { type: "text", text: content };
     if (message?.tool_calls && message.tool_calls.length > 0) {
       yield { type: "tool_calls", calls: message.tool_calls };
     }
@@ -257,6 +419,7 @@ export class OpenAiChatClient {
     >();
     let finishReason = "stop";
     let receivedBytes = 0;
+    const tagFilter = new StreamingTagFilter();
     for await (const payload of readSseData(response.body, signal, (bytes) => {
       receivedBytes += bytes;
     })) {
@@ -270,17 +433,17 @@ export class OpenAiChatClient {
       const choice = parsed.choices?.[0];
       if (!choice) continue;
       if (choice.finish_reason) finishReason = choice.finish_reason;
-      const delta = choice.delta;
-      const thoughtDelta =
-        delta?.reasoning_content ||
-        delta?.thought ||
-        delta?.thinking ||
-        delta?.reasoning;
-      if (thoughtDelta) {
-        yield { type: "thought", text: thoughtDelta };
+      const delta = choice.delta as Record<string, unknown> | undefined;
+      const reasoningInfo = extractReasoning(delta);
+      if (reasoningInfo.reasoningText) {
+        yield { type: "thought", text: reasoningInfo.reasoningText };
       }
-      if (delta?.content) yield { type: "text", text: delta.content };
-      for (const part of delta?.tool_calls ?? []) {
+      if (!reasoningInfo.consumeContent && typeof delta?.content === "string") {
+        for (const item of tagFilter.process(delta.content)) {
+          yield item;
+        }
+      }
+      for (const part of (delta?.tool_calls as any[]) ?? []) {
         const index = part.index ?? 0;
         const current = pending.get(index) ?? {
           id: "",
@@ -292,6 +455,9 @@ export class OpenAiChatClient {
         if (part.function?.arguments) current.arguments += part.function.arguments;
         pending.set(index, current);
       }
+    }
+    for (const item of tagFilter.flush()) {
+      yield item;
     }
     if (pending.size > 0) {
       const calls: ChatToolCall[] = [...pending.values()].map((call) => ({

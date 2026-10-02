@@ -37,6 +37,7 @@ export interface ToolCallHost {
   scrollToBottom: () => void;
   renderToolContent?: (item: acp.ToolCallContent) => HTMLElement;
   makeButton?: (label: string, onClick: () => void) => HTMLButtonElement;
+  onDeleteToolCall?: (toolCallId: string) => void;
 }
 
 function rawOutputText(update: ToolUpdate): string | null {
@@ -151,6 +152,16 @@ export class ToolCallManager {
     const status = createElement("span", { class: "pulsar-assistant-tool-status" });
     status.textContent = toolCall.status || "pending";
 
+    const deleteButton = createElement("button", {
+      class: ["icon", "icon-trashcan", "pulsar-assistant-item-delete"],
+    }) as HTMLButtonElement;
+    deleteButton.type = "button";
+    deleteButton.title = "Delete from context";
+    deleteButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.host.onDeleteToolCall?.(toolCall.toolCallId);
+    });
+
     const summary = createElement("div", { class: "pulsar-assistant-tool-summary", style: { display: "none" } });
 
     const toggle = createElement("button", { class: "pulsar-assistant-tool-toggle", style: { display: "none" } });
@@ -158,6 +169,7 @@ export class ToolCallManager {
 
     heading.appendChild(title);
     heading.appendChild(status);
+    heading.appendChild(deleteButton);
     block.appendChild(heading);
 
     const body = createElement("div", { class: "pulsar-assistant-tool-body" });
@@ -278,5 +290,13 @@ export class ToolCallManager {
     } else if (!view.expanded) {
       view.summary.style.display = summaryText ? "" : "none";
     }
+  }
+
+  removeToolView(toolCallId: string): void {
+    const view = this.toolViews.get(toolCallId);
+    if (!view) return;
+    view.locationTooltip?.dispose();
+    view.element.remove();
+    this.toolViews.delete(toolCallId);
   }
 }
