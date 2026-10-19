@@ -2,6 +2,12 @@ import * as acp from "@agentclientprotocol/sdk";
 import type { LaunchTarget } from "../types";
 import type { StoredContextMessage } from "../../session-storage";
 
+export interface PinnedFilesStore {
+  getPinnedFiles(): string[];
+  pinFile(filePath: string): Promise<boolean>;
+  unpinFile(filePath: string): Promise<boolean>;
+}
+
 export interface BackendInitResult {
   /** null when the backend starts without an active session. */
   sessionId: string | null;

@@ -16,7 +16,7 @@ export const MAX_TOOL_ITERATIONS = 200; // This is default
  * compacted; assistant tool-call arguments are never rewritten.
  * Set to 0 to disable automatic compaction.
  */
-export const TOOL_OUTPUT_COMPACT_INTERVAL = 30;
+export const TOOL_OUTPUT_COMPACT_INTERVAL = 50;
 
 export const HOST_CONTEXT_START = "<pulsar-assistant-host-context>";
 export const HOST_CONTEXT_END = "</pulsar-assistant-host-context>";

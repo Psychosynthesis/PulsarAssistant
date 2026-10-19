@@ -7,6 +7,9 @@ import {
   safeProjectKey,
   getProjectStorageDir,
   getProjectTreePath,
+  getPinnedFilesPath,
+  loadPinnedFiles,
+  savePinnedFiles,
   saveSession,
   loadSession,
   listSessions,
@@ -111,4 +114,58 @@ test("session CRUD and message operations", async (t) => {
   assert.equal(deletedSess, true);
   const reloadedAfterDelete = await loadSession(tmpDir, "sess-1234");
   assert.equal(reloadedAfterDelete, null);
+});
+
+test("saveSession/loadSession: round-trips reasoning_content", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pa-storage-"));
+  try {
+    await saveSession(tmpDir, {
+      version: 1,
+      id: "sess-reasoning",
+      summary: "",
+      cwd: "/project",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      messages: [
+        {
+          id: "m1",
+          timestamp: Date.now(),
+          role: "system",
+          content: "sys",
+        },
+        {
+          id: "m2",
+          timestamp: Date.now(),
+          role: "assistant",
+          content: "done",
+          reasoning_content: "thought about it",
+        },
+      ],
+    });
+    const loaded = await loadSession(tmpDir, "sess-reasoning");
+    assert.equal(loaded.messages[1].reasoning_content, "thought about it");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("savePinnedFiles/loadPinnedFiles: round-trips pinned file list", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pa-pinned-"));
+  try {
+    assert.equal(getPinnedFilesPath(tmpDir), path.join(tmpDir, "pinned.json"));
+
+    const initial = await loadPinnedFiles(tmpDir);
+    assert.deepEqual(initial, []);
+
+    await savePinnedFiles(tmpDir, ["src/server.js", "src/types.ts"]);
+    const loaded = await loadPinnedFiles(tmpDir);
+    assert.deepEqual(loaded, ["src/server.js", "src/types.ts"]);
+
+    // Corrupt file falls back to empty list.
+    fs.writeFileSync(path.join(tmpDir, "pinned.json"), "{not json", "utf8");
+    const fallback = await loadPinnedFiles(tmpDir);
+    assert.deepEqual(fallback, []);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

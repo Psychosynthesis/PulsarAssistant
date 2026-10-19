@@ -4,6 +4,7 @@ import {
   buildIgnoredDirsSet,
   getConfiguredIgnoredDirs,
 } from "./ignored-dirs";
+import { toPosixPath } from "./paths";
 
 export interface FileEntryInfo {
   size: number;
@@ -33,11 +34,9 @@ export interface SerializedProjectFileTree {
 
 export const DEFAULT_PROJECT_SKIP_DIRS: Set<string> = buildIgnoredDirsSet();
 
-export function toPosixPath(relPath: string): string {
-  // Normalize backslashes on every platform so tree keys stay portable
-  // (e.g. a tree.json saved on Windows must load on Linux and vice versa).
-  return relPath.replace(/\\/g, "/");
-}
+// Re-exported for backwards compatibility; the canonical implementation now
+// lives in the project path facade (src/paths.ts).
+export { toPosixPath };
 
 export class BTreeNode<V> {
   leaf: boolean;

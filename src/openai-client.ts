@@ -5,6 +5,7 @@ export type ChatMessage =
       role: "assistant";
       content: string | null;
       tool_calls?: ChatToolCall[];
+      reasoning_content?: string | null;
     }
   | { role: "tool"; tool_call_id: string; content: string };
 
@@ -52,6 +53,10 @@ export type OpenAiClientOptions = {
   // same either way so callers do not branch on transport.
   stream?: boolean;
   fetch?: typeof fetch;
+  // When true (or when the resolver returns true), include_reasoning: true is
+  // added to the POST body. Some providers only stream model thoughts when
+  // explicitly asked to.
+  includeReasoning?: boolean | (() => boolean);
 };
 
 export type OpenAiModelInfo = {
@@ -113,6 +118,9 @@ function extractReasoning(obj: Record<string, unknown> | undefined): {
   const candidateKeys = [
     "reasoning_content",
     "reasoning",
+    "reasoning_text",
+    "reasoningText",
+    "thoughts",
     "thinking",
     "thinking_process",
     "reasoningContent",
@@ -136,6 +144,14 @@ function extractReasoning(obj: Record<string, unknown> | undefined): {
 
   if (typeof obj.thought === "string" && obj.thought.length > 0) {
     return { reasoningText: obj.thought, consumeContent: false };
+  }
+  if (obj.thought && typeof obj.thought === "object") {
+    const textVal =
+      (obj.thought as { text?: unknown; content?: unknown }).text ??
+      (obj.thought as { text?: unknown; content?: unknown }).content;
+    if (typeof textVal === "string" && textVal.length > 0) {
+      return { reasoningText: textVal, consumeContent: false };
+    }
   }
   if (obj.thought === true) {
     const thoughtText =
@@ -178,7 +194,7 @@ class StreamingTagFilter {
 
     while (this.buffer.length > 0) {
       if (!this.inTag) {
-        const match = this.buffer.match(/<(think|thought)>/i);
+        const match = this.buffer.match(/<(think|thought|thinking|reasoning)>/i);
         if (match && match.index !== undefined) {
           const textBefore = this.buffer.slice(0, match.index);
           if (textBefore.length > 0) {
@@ -187,7 +203,7 @@ class StreamingTagFilter {
           this.inTag = true;
           this.buffer = this.buffer.slice(match.index + match[0].length);
         } else {
-          const partialMatch = this.buffer.match(/<[a-z]{0,7}$/i);
+          const partialMatch = this.buffer.match(/<[a-z]{0,9}$/i);
           if (partialMatch && partialMatch.index !== undefined) {
             const safeText = this.buffer.slice(0, partialMatch.index);
             if (safeText.length > 0) {
@@ -201,7 +217,7 @@ class StreamingTagFilter {
           }
         }
       } else {
-        const match = this.buffer.match(/<\/(think|thought)>/i);
+        const match = this.buffer.match(/<\/(think|thought|thinking|reasoning)>/i);
         if (match && match.index !== undefined) {
           const thoughtBefore = this.buffer.slice(0, match.index);
           if (thoughtBefore.length > 0) {
@@ -210,7 +226,7 @@ class StreamingTagFilter {
           this.inTag = false;
           this.buffer = this.buffer.slice(match.index + match[0].length);
         } else {
-          const partialMatch = this.buffer.match(/<\/[a-z]{0,7}$/i);
+          const partialMatch = this.buffer.match(/<\/[a-z]{0,9}$/i);
           if (partialMatch && partialMatch.index !== undefined) {
             const safeThought = this.buffer.slice(0, partialMatch.index);
             if (safeThought.length > 0) {
@@ -362,7 +378,7 @@ export class OpenAiChatClient {
       ? ""
       : (message?.content ?? "");
 
-    const inlineThinkRegex = /<(think|thought)>([\s\S]*?)<\/\1>/gi;
+    const inlineThinkRegex = /<(think|thought|thinking|reasoning)>([\s\S]*?)<\/\1>/gi;
     const tagThoughts: string[] = [];
     content = content
       .replace(inlineThinkRegex, (_: string, _tag: string, match: string) => {
@@ -434,7 +450,10 @@ export class OpenAiChatClient {
       if (!choice) continue;
       if (choice.finish_reason) finishReason = choice.finish_reason;
       const delta = choice.delta as Record<string, unknown> | undefined;
-      const reasoningInfo = extractReasoning(delta);
+      const deltaReasoning = extractReasoning(delta);
+      const reasoningInfo = deltaReasoning.reasoningText
+        ? deltaReasoning
+        : extractReasoning(choice as Record<string, unknown>);
       if (reasoningInfo.reasoningText) {
         yield { type: "thought", text: reasoningInfo.reasoningText };
       }
@@ -474,13 +493,24 @@ export class OpenAiChatClient {
     yield { type: "done", finishReason };
   }
 
+  private resolveIncludeReasoning(): boolean {
+    const value = this.options.includeReasoning;
+    if (typeof value === "function") return value();
+    return value === true;
+  }
+
   private async post(
     request: ChatRequest,
     stream: boolean,
     signal: AbortSignal,
   ): Promise<{ response: Response; requestBytes: number }> {
     const url = completionsUrl(this.options.baseUrl);
-    const body = JSON.stringify({ ...request, stream });
+    const includeReasoning = this.resolveIncludeReasoning();
+    const body = JSON.stringify(
+      includeReasoning
+        ? { ...request, stream, include_reasoning: true }
+        : { ...request, stream },
+    );
     const response = await this.fetchImpl(url, {
       method: "POST",
       headers: {

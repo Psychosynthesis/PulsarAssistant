@@ -7,8 +7,9 @@ import type { EditorBackend } from "../../editor";
 import type { ProjectFileTreeManager } from "../file-tree-manager";
 import type { AgentEvent } from "../types";
 import { CLIENT_INFO, PROTOCOL_VERSION } from "../../constants";
-import type { AgentBackend, BackendInitResult } from "./backend";
+import type { AgentBackend, BackendInitResult, PinnedFilesStore } from "./backend";
 import type { StoredContextMessage } from "../../session-storage";
+import { createProxyFetch } from "../../proxy-fetch";
 
 export class BuiltinBackend implements AgentBackend {
   private builtin: BuiltinAgent | null = null;
@@ -25,6 +26,8 @@ export class BuiltinBackend implements AgentBackend {
     private readonly editor: EditorBackend,
     private readonly fileTreeManager: ProjectFileTreeManager,
     private readonly emit: (event: AgentEvent) => void,
+    private readonly pinnedStore?: PinnedFilesStore,
+    private readonly resolveProxyUrl?: () => string | null | undefined,
   ) {}
 
   async start(cwd: string): Promise<BackendInitResult> {
@@ -38,6 +41,12 @@ export class BuiltinBackend implements AgentBackend {
         ),
       this.fileTreeManager.getStorageDir(),
       () => this.fileTreeManager.getFileTree(),
+      () =>
+        this.editor.getProjectConfig<boolean>("pulsar-assistant.includeReasoning") !==
+        false,
+      this.resolveProxyUrl
+        ? createProxyFetch(this.resolveProxyUrl)
+        : undefined,
     );
     this.builtin = builtin;
 
@@ -268,6 +277,10 @@ export class BuiltinBackend implements AgentBackend {
           .getFileTree()
           .updatePath(params.destinationPath);
         this.emit({ type: "file-written", path: params.destinationPath });
+      },
+      getPinnedFiles: () => this.pinnedStore?.getPinnedFiles() ?? [],
+      unpinFile: async (path: string) => {
+        return (await this.pinnedStore?.unpinFile(path)) ?? false;
       },
       onStatusNote: (note: string) => {
         this.emit({ type: "status-note", text: note });

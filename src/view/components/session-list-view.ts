@@ -19,6 +19,91 @@ export interface SessionListHost {
   addTooltip: (element: HTMLElement, title: string) => Disposable;
 }
 
+/** Render rows into `rowsHost`, replacing previous content and tooltips. */
+export function renderSessionRows(
+  host: SessionListHost,
+  rowsHost: HTMLElement,
+  tooltips: Set<Disposable>,
+): void {
+  for (const tooltip of tooltips) tooltip.dispose();
+  tooltips.clear();
+  rowsHost.replaceChildren();
+
+  const sessions = host.getSessions();
+  if (sessions.length === 0) {
+    rowsHost.appendChild(elementFromHtml(SESSION_LIST_EMPTY));
+    return;
+  }
+
+  const activeId = host.getActiveSessionId();
+  for (const session of sessions) {
+    rowsHost.appendChild(
+      renderSessionRow(host, tooltips, session, session.id === activeId),
+    );
+  }
+}
+
+function renderSessionRow(
+  host: SessionListHost,
+  tooltips: Set<Disposable>,
+  session: ProjectSessionRow,
+  isActive: boolean,
+): HTMLElement {
+  const row = elementFromHtml(SESSION_ROW);
+  const entry = ref<HTMLButtonElement>(row, "entry");
+  const title = ref(row, "title");
+  const time = ref(row, "time");
+  const badge = ref(row, "agent");
+  const deleteBtn = ref<HTMLButtonElement>(row, "delete");
+
+  if (isActive) row.classList.add("is-active");
+  if (session.agentLabel) {
+    row.classList.add("is-foreign");
+    row.dataset.agent = session.agentLabel;
+  }
+
+  if (isActive) entry.setAttribute("aria-current", "true");
+  title.textContent = session.title;
+
+  if (session.time) {
+    time.textContent = session.time;
+  } else {
+    time.remove();
+  }
+
+  if (session.agentLabel) {
+    badge.textContent = session.agentLabel;
+    tooltips.add(
+      host.addTooltip(
+        entry,
+        `Other agent: ${session.agentLabel}. Switch the agent to open this session.`,
+      ),
+    );
+  } else {
+    badge.remove();
+  }
+
+  if (!isActive) {
+    entry.addEventListener("click", () =>
+      host.onSelect(session.id, session.cwd),
+    );
+  } else {
+    entry.disabled = true;
+  }
+
+  if (session.deletable) {
+    tooltips.add(host.addTooltip(deleteBtn, "Delete session"));
+    deleteBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      host.onDelete(session.id, session.cwd);
+    });
+  } else {
+    deleteBtn.remove();
+  }
+
+  return row;
+}
+
 /**
  * Sessions button plus the panel it toggles. Owns the DOM and the row
  * rendering; the host only supplies data and reactions.
@@ -88,24 +173,11 @@ export class SessionListView {
 
   /** Re-render rows; also drops the panel when nothing is left to show. */
   refresh(): void {
-    for (const tooltip of this.tooltips) tooltip.dispose();
-    this.tooltips.clear();
-    this.rowsHost.replaceChildren();
+    renderSessionRows(this.host, this.rowsHost, this.tooltips);
 
     const sessions = this.host.getSessions();
     this.available = sessions.length > 0;
     if (!this.available) this.open = false;
-
-    if (sessions.length === 0) {
-      this.rowsHost.appendChild(elementFromHtml(SESSION_LIST_EMPTY));
-      this.syncVisibility();
-      return;
-    }
-
-    const activeId = this.host.getActiveSessionId();
-    for (const session of sessions) {
-      this.rowsHost.appendChild(this.renderRow(session, session.id === activeId));
-    }
     this.syncVisibility();
   }
 
@@ -115,65 +187,6 @@ export class SessionListView {
     this.toggleTooltip.dispose();
     this.toggle.remove();
     this.panel.remove();
-  }
-
-  private renderRow(
-    session: ProjectSessionRow,
-    isActive: boolean,
-  ): HTMLElement {
-    const row = elementFromHtml(SESSION_ROW);
-    const entry = ref<HTMLButtonElement>(row, "entry");
-    const title = ref(row, "title");
-    const time = ref(row, "time");
-    const badge = ref(row, "agent");
-    const deleteBtn = ref<HTMLButtonElement>(row, "delete");
-
-    if (isActive) row.classList.add("is-active");
-    if (session.agentLabel) {
-      row.classList.add("is-foreign");
-      row.dataset.agent = session.agentLabel;
-    }
-
-    if (isActive) entry.setAttribute("aria-current", "true");
-    title.textContent = session.title;
-
-    if (session.time) {
-      time.textContent = session.time;
-    } else {
-      time.remove();
-    }
-
-    if (session.agentLabel) {
-      badge.textContent = session.agentLabel;
-      this.tooltips.add(
-        this.host.addTooltip(
-          entry,
-          `Other agent: ${session.agentLabel}. Switch the agent to open this session.`,
-        ),
-      );
-    } else {
-      badge.remove();
-    }
-
-    if (!isActive) {
-      entry.addEventListener("click", () =>
-        this.host.onSelect(session.id, session.cwd),
-      );
-    } else {
-      entry.disabled = true;
-    }
-
-    if (session.deletable) {
-      this.tooltips.add(this.host.addTooltip(deleteBtn, "Delete session"));
-      deleteBtn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        this.host.onDelete(session.id, session.cwd);
-      });
-    } else {
-      deleteBtn.remove();
-    }
-
-    return row;
   }
 
   private syncVisibility(): void {

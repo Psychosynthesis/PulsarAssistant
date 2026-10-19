@@ -4,8 +4,9 @@ import { parseCommandLine, runCapturedProcess } from "../util";
 import { findFiles, grepFiles, listDirectory } from "../grep";
 import { planGitCommand } from "../git-command";
 import { resolveInsideRoot } from "../project-uri";
-import { robustReplace } from "../input-normalize";
+import { normalizeInputPath, robustReplace } from "../input-normalize";
 import { ProjectFileTree } from "../file-btree";
+import { toPosixPath } from "../paths";
 import type { ProjectPolicy } from "../project-policy";
 import type { ChatTool } from "../openai-client";
 
@@ -23,11 +24,13 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
           path: { type: "string" },
           line: {
             type: "integer",
-            description: "1-based start line. Omit to read from the start.",
+            description:
+              "1-based start line. Omit to read from the start. This is a line number, not a byte offset.",
           },
           limit: {
             type: "integer",
-            description: "Maximum number of lines to return.",
+            description:
+              "Maximum number of lines to return (a count, not an end line: the slice spans line..line+limit-1).",
           },
         },
         required: ["path"],
@@ -39,7 +42,7 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
     function: {
       name: "write_file",
       description:
-        "Create, overwrite, or patch a text file in the project. Pass `content` to replace the whole file, or pass `searchText` and `replaceText` to replace all occurrences of searchText. Writing inside .git is not allowed.",
+        "Create or fully overwrite a text file in the project. Pass `content` with the complete new file contents (this replaces the entire file). For targeted edits (search/replace or line ranges) use write_diff. Writing inside .git is not allowed.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -48,18 +51,10 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
           content: {
             type: "string",
             description:
-              "Full new file content. Use either this or searchText/replaceText.",
-          },
-          searchText: {
-            type: "string",
-            description: "Text to find and replace in the existing file.",
-          },
-          replaceText: {
-            type: "string",
-            description: "Replacement for every occurrence of searchText.",
+              "Complete new file contents. Replaces the whole file, so include every line — do not pass partial content.",
           },
         },
-        required: ["path"],
+        required: ["path", "content"],
       },
     },
   },
@@ -306,6 +301,26 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "unpin_file",
+      description:
+        "Unpin a previously pinned file from the project context once work on it is complete. Important! Don't forget to detach the files once the task is complete.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          path: {
+            type: "string",
+            description:
+              "Project-relative or absolute path of the file to unpin.",
+          },
+        },
+        required: ["path"],
+      },
+    },
+  },
 ];
 
 export function toolsForPolicy(policy: ProjectPolicy): ChatTool[] {
@@ -338,8 +353,25 @@ export type BuiltinHost = {
     sourcePath: string;
     destinationPath: string;
   }): Promise<void>;
+  getPinnedFiles?: () => string[];
+  unpinFile?: (path: string) => Promise<boolean>;
   onStatusNote?: (note: string) => void;
   onThought?: (thought: string) => void;
+};
+
+/**
+ * Single typed environment passed to every tool handler. It carries the active
+ * session, the editor backend primitives (host), the project policy and the
+ * cancellation signal, so adding a new capability no longer means threading a
+ * new parameter through every tool function.
+ */
+export type ToolExecutionContext = {
+  host: BuiltinHost;
+  sessionId: acp.SessionId;
+  cwd: string;
+  signal: AbortSignal;
+  policy: ProjectPolicy;
+  fileTree?: ProjectFileTree | null;
 };
 
 export type ToolMeta = {
@@ -378,9 +410,19 @@ function stringArg(args: Record<string, unknown>, key: string): string | undefin
 
 function intArg(args: Record<string, unknown>, key: string): number | undefined {
   const value = args[key];
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.trunc(value)
-    : undefined;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  // Some models emit numbers as JSON strings (e.g. {"line": "340"}). Coerce
+  // them instead of silently ignoring them, which would make reads start from
+  // line 1 and edits target the wrong range.
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed !== "" && Number.isFinite(Number(trimmed))) {
+      return Math.trunc(Number(trimmed));
+    }
+  }
+  return undefined;
 }
 
 function assertWritablePath(cwd: string, filePath: string): void {
@@ -390,16 +432,20 @@ function assertWritablePath(cwd: string, filePath: string): void {
   }
 }
 
+function resolveToolPath(ctx: ToolExecutionContext, raw: string): string {
+  return resolveInsideRoot(ctx.cwd, raw);
+}
+
 export function describeToolCall(
   name: string,
   rawArguments: string,
-  cwd: string,
-  policy: ProjectPolicy,
+  ctx: ToolExecutionContext,
 ): ToolMeta {
+  const { cwd, policy } = ctx;
   const args = asRecord(rawArguments);
   switch (name) {
     case "read_file": {
-      const filePath = resolveInsideRoot(cwd, stringArg(args, "path") ?? ".");
+      const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
       return {
         title: `Read ${path.basename(filePath)}`,
         kind: "read",
@@ -409,25 +455,18 @@ export function describeToolCall(
       };
     }
     case "write_file": {
-      const filePath = resolveInsideRoot(cwd, stringArg(args, "path") ?? ".");
+      const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
       assertWritablePath(cwd, filePath);
-      const rawInput: Record<string, unknown> = { path: filePath };
-      if (stringArg(args, "content") !== undefined) {
-        rawInput.content = stringArg(args, "content");
-      } else {
-        rawInput.searchText = stringArg(args, "searchText");
-        rawInput.replaceText = stringArg(args, "replaceText");
-      }
       return {
-        title: `Edit ${path.basename(filePath)}`,
+        title: `Rewrite ${path.basename(filePath)}`,
         kind: "edit",
         locations: [{ path: filePath }],
-        rawInput,
+        rawInput: { path: filePath, content: stringArg(args, "content") },
         needsPermission: true,
       };
     }
     case "write_diff": {
-      const filePath = resolveInsideRoot(cwd, stringArg(args, "path") ?? ".");
+      const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
       assertWritablePath(cwd, filePath);
       return {
         title: `Edit ${path.basename(filePath)}`,
@@ -438,12 +477,12 @@ export function describeToolCall(
       };
     }
     case "move_file": {
-      const sourcePath = resolveInsideRoot(
-        cwd,
+      const sourcePath = resolveToolPath(
+        ctx,
         stringArg(args, "sourcePath") ?? ".",
       );
-      const destinationPath = resolveInsideRoot(
-        cwd,
+      const destinationPath = resolveToolPath(
+        ctx,
         stringArg(args, "destinationPath") ?? ".",
       );
       assertWritablePath(cwd, sourcePath);
@@ -481,7 +520,7 @@ export function describeToolCall(
       };
     }
     case "list_dir": {
-      const dirPath = resolveInsideRoot(cwd, stringArg(args, "path") ?? ".");
+      const dirPath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
       return {
         title: `List ${path.basename(dirPath) || dirPath}`,
         kind: "read",
@@ -554,19 +593,28 @@ export function describeToolCall(
         needsPermission: false,
       };
     }
+    case "unpin_file": {
+      const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
+      return {
+        title: `Unpin ${path.basename(filePath)}`,
+        kind: "edit",
+        locations: [{ path: filePath }],
+        rawInput: { path: filePath },
+        needsPermission: false,
+      };
+    }
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
 }
 
 export async function requestToolPermission(
-  conn: BuiltinHost,
-  sessionId: string,
+  ctx: ToolExecutionContext,
   toolCallId: string,
   meta: ToolMeta,
 ): Promise<boolean> {
-  const response = await conn.requestPermission({
-    sessionId,
+  const response = await ctx.host.requestPermission({
+    sessionId: ctx.sessionId,
     toolCall: {
       toolCallId,
       title: meta.title,
@@ -585,56 +633,71 @@ export async function requestToolPermission(
 }
 
 export async function executeTool(
-  conn: BuiltinHost,
-  sessionId: string,
+  ctx: ToolExecutionContext,
   name: string,
   rawArguments: string,
-  cwd: string,
-  signal: AbortSignal,
-  policy: ProjectPolicy,
-  fileTree?: ProjectFileTree | null,
 ): Promise<ToolSuccess> {
-  if (signal.aborted) throw new Error("Cancelled.");
+  if (ctx.signal.aborted) throw new Error("Cancelled.");
   const args = asRecord(rawArguments);
   switch (name) {
     case "read_file":
-      return readFileTool(conn, sessionId, cwd, args);
+      return readFileTool(ctx, args);
     case "write_file":
-      return writeFileTool(conn, sessionId, cwd, args);
+      return writeFileTool(ctx, args);
     case "write_diff":
-      return writeDiffTool(conn, sessionId, cwd, args);
+      return writeDiffTool(ctx, args);
     case "move_file":
-      return moveFileTool(conn, sessionId, cwd, args);
+      return moveFileTool(ctx, args);
     case "find_files":
-      return findFilesTool(cwd, args, fileTree);
+      return findFilesTool(ctx, args);
     case "get_file_structure":
-      return getFileStructureTool(cwd, args, fileTree);
+      return getFileStructureTool(ctx, args);
     case "list_dir":
-      return listDirTool(cwd, args);
+      return listDirTool(ctx, args);
     case "grep":
-      return grepTool(cwd, args, fileTree);
+      return grepTool(ctx, args);
     case "git":
-      return gitTool(cwd, args, signal);
+      return gitTool(ctx, args);
     case "run_command":
-      return runCommandTool(cwd, args, signal, policy);
+      return runCommandTool(ctx, args);
     case "run_tests":
-      return runTestsTool(cwd, signal, policy);
+      return runTestsTool(ctx);
     case "run_build":
-      return runBuildTool(cwd, signal, policy);
+      return runBuildTool(ctx);
+    case "unpin_file":
+      return unpinFileTool(ctx, args);
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
 }
 
-async function readFileTool(
-  conn: BuiltinHost,
-  sessionId: string,
-  cwd: string,
+async function unpinFileTool(
+  ctx: ToolExecutionContext,
   args: Record<string, unknown>,
 ): Promise<ToolSuccess> {
-  const filePath = resolveInsideRoot(cwd, stringArg(args, "path") ?? ".");
-  const result = await conn.readTextFile({
-    sessionId,
+  const rawPath = normalizeInputPath(stringArg(args, "path") ?? "");
+  const filePath = resolveToolPath(ctx, rawPath);
+  if (!ctx.host.unpinFile) {
+    throw new Error("Pinned files are not supported by this backend.");
+  }
+  const removed = await ctx.host.unpinFile(filePath);
+  if (!removed) {
+    return {
+      output: `File "${path.basename(filePath)}" was not pinned, nothing changed.`,
+    };
+  }
+  return {
+    output: `File "${path.basename(filePath)}" successfully unpinned from context.`,
+  };
+}
+
+async function readFileTool(
+  ctx: ToolExecutionContext,
+  args: Record<string, unknown>,
+): Promise<ToolSuccess> {
+  const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
+  const result = await ctx.host.readTextFile({
+    sessionId: ctx.sessionId,
     path: filePath,
     line: intArg(args, "line") ?? null,
     limit: intArg(args, "limit") ?? null,
@@ -670,83 +733,65 @@ function assertNoSystemicMarker(
 }
 
 async function writeFileTool(
-  conn: BuiltinHost,
-  sessionId: string,
-  cwd: string,
+  ctx: ToolExecutionContext,
   args: Record<string, unknown>,
 ): Promise<ToolSuccess> {
-  const filePath = resolveInsideRoot(cwd, stringArg(args, "path") ?? ".");
-  assertWritablePath(cwd, filePath);
+  const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
+  assertWritablePath(ctx.cwd, filePath);
 
   const fullContent = stringArg(args, "content");
   const searchText = stringArg(args, "searchText");
   const replaceText = stringArg(args, "replaceText");
 
-  assertNoSystemicMarker(fullContent, "content");
-  assertNoSystemicMarker(searchText, "searchText");
-  assertNoSystemicMarker(replaceText, "replaceText");
-
-  if (fullContent !== undefined && searchText !== undefined) {
+  if (searchText !== undefined || replaceText !== undefined) {
     throw new Error(
-      "write_file accepts either `content` or `searchText`+`replaceText`, not both.",
+      "write_file now only rewrites whole files. Use write_diff with `search`/`replace` or `startLine`/`endLine` for targeted edits.",
     );
+  }
+
+  assertNoSystemicMarker(fullContent, "content");
+
+  if (fullContent === undefined) {
+    throw new Error("write_file requires `content` (the complete new file).");
   }
 
   let oldText: string | null = null;
   try {
-    const existing = await conn.readTextFile({ sessionId, path: filePath });
+    const existing = await ctx.host.readTextFile({
+      sessionId: ctx.sessionId,
+      path: filePath,
+    });
     oldText = existing.content ?? "";
   } catch {
     oldText = null;
   }
 
-  let newContent: string;
-  let replacedCount = 0;
-
-  if (searchText !== undefined) {
-    if (replaceText === undefined) {
-      throw new Error("write_file `searchText` requires `replaceText`.");
-    }
-    if (searchText.length === 0) {
-      throw new Error("write_file `searchText` must not be empty.");
-    }
-    const current = oldText ?? "";
-    const res = robustReplace(current, searchText, replaceText, true);
-    replacedCount = res.count;
-    newContent = res.newContent;
-  } else {
-    if (fullContent === undefined) {
-      throw new Error(
-        "write_file requires either `content` or `searchText`+`replaceText`.",
-      );
-    }
-    newContent = fullContent;
-  }
-
-  await conn.writeTextFile({ sessionId, path: filePath, content: newContent });
+  await ctx.host.writeTextFile({
+    sessionId: ctx.sessionId,
+    path: filePath,
+    content: fullContent,
+  });
   return {
-    output:
-      searchText !== undefined
-        ? `Replaced ${replacedCount} occurrence${replacedCount === 1 ? "" : "s"} in ${filePath}`
-        : `Wrote ${filePath}`,
+    output: `Wrote ${filePath}`,
     content: [
-      { type: "diff", path: filePath, oldText, newText: newContent },
+      { type: "diff", path: filePath, oldText, newText: fullContent },
     ],
   };
 }
 
 async function writeDiffTool(
-  conn: BuiltinHost,
-  sessionId: string,
-  cwd: string,
+  ctx: ToolExecutionContext,
   args: Record<string, unknown>,
 ): Promise<ToolSuccess> {
-  const filePath = resolveInsideRoot(cwd, stringArg(args, "path") ?? ".");
-  assertWritablePath(cwd, filePath);
+  const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
+  assertWritablePath(ctx.cwd, filePath);
 
   let oldText: string | null = null;
   try {
-    const existing = await conn.readTextFile({ sessionId, path: filePath });
+    const existing = await ctx.host.readTextFile({
+      sessionId: ctx.sessionId,
+      path: filePath,
+    });
     oldText = existing.content ?? "";
   } catch {
     oldText = "";
@@ -798,7 +843,11 @@ async function writeDiffTool(
     );
   }
 
-  await conn.writeTextFile({ sessionId, path: filePath, content: newContent });
+  await ctx.host.writeTextFile({
+    sessionId: ctx.sessionId,
+    path: filePath,
+    content: newContent,
+  });
   return {
     output: summary,
     content: [
@@ -808,29 +857,30 @@ async function writeDiffTool(
 }
 
 async function moveFileTool(
-  conn: BuiltinHost,
-  sessionId: string,
-  cwd: string,
+  ctx: ToolExecutionContext,
   args: Record<string, unknown>,
 ): Promise<ToolSuccess> {
-  const sourcePath = resolveInsideRoot(
-    cwd,
+  const sourcePath = resolveToolPath(
+    ctx,
     stringArg(args, "sourcePath") ?? ".",
   );
-  const destinationPath = resolveInsideRoot(
-    cwd,
+  const destinationPath = resolveToolPath(
+    ctx,
     stringArg(args, "destinationPath") ?? ".",
   );
-  assertWritablePath(cwd, sourcePath);
-  assertWritablePath(cwd, destinationPath);
-  await conn.moveTextFile({ sessionId, sourcePath, destinationPath });
+  assertWritablePath(ctx.cwd, sourcePath);
+  assertWritablePath(ctx.cwd, destinationPath);
+  await ctx.host.moveTextFile({
+    sessionId: ctx.sessionId,
+    sourcePath,
+    destinationPath,
+  });
   return { output: `Moved ${sourcePath} -> ${destinationPath}` };
 }
 
 async function findFilesTool(
-  cwd: string,
+  ctx: ToolExecutionContext,
   args: Record<string, unknown>,
-  fileTree?: ProjectFileTree | null,
 ): Promise<ToolSuccess> {
   const pattern = stringArg(args, "pattern");
   const searchPath = stringArg(args, "path");
@@ -840,62 +890,60 @@ async function findFilesTool(
   const matches = await findFiles({
     pattern,
     extensions,
-    cwd,
+    cwd: ctx.cwd,
     searchPath,
     caseInsensitive: args.caseInsensitive === true,
     maxResults: intArg(args, "maxResults"),
-    fileTree,
+    fileTree: ctx.fileTree,
   });
   if (matches.length === 0) return { output: "No files matched." };
   return { output: matches.join("\n") };
 }
 
 async function getFileStructureTool(
-  cwd: string,
+  ctx: ToolExecutionContext,
   args: Record<string, unknown>,
-  fileTree?: ProjectFileTree | null,
 ): Promise<ToolSuccess> {
   const searchPath = stringArg(args, "path") ?? ".";
   const depth = intArg(args, "depth") ?? 5;
-  if (fileTree && fileTree.size > 0) {
-    const text = fileTree.toHierarchyText(500, searchPath, depth);
+  if (ctx.fileTree && ctx.fileTree.size > 0) {
+    const text = ctx.fileTree.toHierarchyText(500, searchPath, depth);
     return { output: text };
   }
-  const tree = new ProjectFileTree(cwd);
+  const tree = new ProjectFileTree(ctx.cwd);
   await tree.scanProject();
   const text = tree.toHierarchyText(500, searchPath, depth);
   return { output: text };
 }
 
 async function grepTool(
-  cwd: string,
+  ctx: ToolExecutionContext,
   args: Record<string, unknown>,
-  fileTree?: ProjectFileTree | null,
 ): Promise<ToolSuccess> {
   const query = stringArg(args, "query") ?? stringArg(args, "pattern");
   if (!query) throw new Error("grep requires a query string.");
   const searchPath = stringArg(args, "path");
   const matches = await grepFiles({
     query,
-    cwd,
+    cwd: ctx.cwd,
     searchPath,
     caseInsensitive: args.caseInsensitive === true,
     maxResults: intArg(args, "maxResults"),
-    fileTree,
+    fileTree: ctx.fileTree,
   });
   if (matches.length === 0) return { output: "No matches." };
   const lines = matches.map((match) => {
-    const relPath = path.relative(cwd, match.path).replace(/\\/g, "/");
+    const relPath = toPosixPath(path.relative(ctx.cwd, match.path));
     return `${relPath}:${match.line}:${match.text}`;
   });
   return { output: lines.join("\n") };
 }
 
 async function listDirTool(
-  cwd: string,
+  ctx: ToolExecutionContext,
   args: Record<string, unknown>,
 ): Promise<ToolSuccess> {
-  const dirPath = resolveInsideRoot(cwd, stringArg(args, "path") ?? ".");
+  const dirPath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
   const entries = await listDirectory(dirPath);
   if (entries.length === 0) return { output: "(empty)" };
   const lines = entries.map((entry) =>
@@ -905,9 +953,8 @@ async function listDirTool(
 }
 
 async function gitTool(
-  cwd: string,
+  ctx: ToolExecutionContext,
   args: Record<string, unknown>,
-  signal: AbortSignal,
 ): Promise<ToolSuccess> {
   const commandLine = stringArg(args, "command");
   if (!commandLine) throw new Error("git requires a command string.");
@@ -916,19 +963,17 @@ async function gitTool(
     await runCapturedProcess({
       command: "git",
       args: plan.args,
-      cwd,
-      signal,
+      cwd: ctx.cwd,
+      signal: ctx.signal,
     }),
   );
 }
 
 async function runCommandTool(
-  cwd: string,
+  ctx: ToolExecutionContext,
   args: Record<string, unknown>,
-  signal: AbortSignal,
-  policy: ProjectPolicy,
 ): Promise<ToolSuccess> {
-  if (!policy.allowCommands) {
+  if (!ctx.policy.allowCommands) {
     throw new Error(
       "Commands are disabled for this project. Set allowCommands: true under pulsar-assistant.projects in Pulsar user config (not in the project folder).",
     );
@@ -938,13 +983,13 @@ async function runCommandTool(
   const argv = parseCommandLine(commandLine);
   const command = argv[0];
   if (!command) throw new Error("run_command command is empty.");
-  const commandCwd = resolveInsideRoot(cwd, stringArg(args, "cwd") ?? ".");
+  const commandCwd = resolveToolPath(ctx, stringArg(args, "cwd") ?? ".");
   return formatProcessResult(
     await runCapturedProcess({
       command,
       args: argv.slice(1),
       cwd: commandCwd,
-      signal,
+      signal: ctx.signal,
     }),
   );
 }
@@ -977,33 +1022,29 @@ async function runConfiguredCommand(
 }
 
 async function runTestsTool(
-  cwd: string,
-  signal: AbortSignal,
-  policy: ProjectPolicy,
+  ctx: ToolExecutionContext,
 ): Promise<ToolSuccess> {
-  const commandLine = policy.testCommand;
+  const commandLine = ctx.policy.testCommand;
   if (!commandLine) {
     throw new Error(
       "No test command configured. Set testCommand under pulsar-assistant.projects in Pulsar user config for this folder (not in the project folder).",
     );
   }
   if (!commandLine.trim()) throw new Error("Configured testCommand is empty.");
-  return runConfiguredCommand(commandLine, cwd, signal);
+  return runConfiguredCommand(commandLine, ctx.cwd, ctx.signal);
 }
 
 async function runBuildTool(
-  cwd: string,
-  signal: AbortSignal,
-  policy: ProjectPolicy,
+  ctx: ToolExecutionContext,
 ): Promise<ToolSuccess> {
-  const commandLine = policy.buildCommand;
+  const commandLine = ctx.policy.buildCommand;
   if (!commandLine) {
     throw new Error(
       "No build command configured. Set buildCommand under pulsar-assistant.projects in Pulsar user config for this folder (not in the project folder).",
     );
   }
   if (!commandLine.trim()) throw new Error("Configured buildCommand is empty.");
-  return runConfiguredCommand(commandLine, cwd, signal);
+  return runConfiguredCommand(commandLine, ctx.cwd, ctx.signal);
 }
 
 function formatProcessResult(result: {

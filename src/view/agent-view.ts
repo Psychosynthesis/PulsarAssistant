@@ -49,7 +49,10 @@ import {
   TestCommandModal,
   BuildCommandModal,
 } from "./components/test-command-modal";
-import { SessionListView } from "./components/session-list-view";
+import { SessionListModal } from "./components/session-list-modal";
+import { SlashComposer } from "./components/slash-composer";
+import { createProxyFetch } from "../proxy-fetch";
+import { PinnedFilesView } from "./components/pinned-files-view";
 import { ChatPlaceholderView } from "./components/chat-placeholder";
 import {
   PromptAttachmentsView,
@@ -78,7 +81,6 @@ import {
 import {
   COMPACT_INTERVAL_CONTROL,
   CONFIG_SELECTORS,
-  slashWrapTemplate,
   TOOL_DELAY_CONTROL,
   TURN_LIMIT_CONTROL,
 } from "./templates/agent-view";
@@ -154,13 +156,7 @@ export class PulsarAssistantView {
   private agentMenu!: HTMLElement;
   private agentMenuOpen = false;
   private readonly agentMenuId = `pulsar-assistant-agent-menu-${Math.random().toString(36).slice(2, 9)}`;
-  private readonly slashMenuId = `pulsar-assistant-slash-menu-${Math.random().toString(36).slice(2, 9)}`;
-  private slashMenu!: HTMLElement;
-  private slashHint!: HTMLElement;
-  private slashHintCommand: string | null = null;
-  private slashMatches: acp.AvailableCommand[] = [];
-  private slashActiveIndex = 0;
-  private slashMenuOpen = false;
+  private slashComposer!: SlashComposer;
   private liveStatusEl!: HTMLElement;
   private restartButton!: HTMLButtonElement;
   private infoButton!: HTMLButtonElement;
@@ -170,7 +166,7 @@ export class PulsarAssistantView {
   private modelSelectorWrap!: HTMLElement;
   private modelSelector!: ModelSelector;
   private contextProgressBar!: ContextProgressBar;
-  private sessionListView!: SessionListView;
+  private sessionListView!: SessionListModal;
   private chatPlaceholder!: ChatPlaceholderView;
   private compactButton!: HTMLButtonElement;
   private newSessionButton!: HTMLButtonElement;
@@ -216,12 +212,15 @@ export class PulsarAssistantView {
   private planBarView!: PlanBarView;
   private toolCallManager!: ToolCallManager;
   private permissionManager!: PermissionManager;
+  private pinnedFilesPanel!: PinnedFilesView;
+  private includeReasoningCheckbox!: HTMLInputElement;
 
   private streamRole: string | null = null;
   private streamMessageId: acp.MessageId | null = null;
   private streamBody: HTMLElement | null = null;
   private streamRawText = "";
   private streamRenderHandle: number | null = null;
+  private currentTurnThought = "";
 
   private subscriptions = new CompositeDisposable();
   private eventSubscription!: Disposable;
@@ -303,6 +302,7 @@ export class PulsarAssistantView {
       scrollToBottom: () => self.scrollToBottom(),
       onDeleteToolCall: (toolCallId) =>
         void self.handleDeleteItem("tool_call", toolCallId),
+      pinFile: (p) => self.pinFile(p),
     });
 
     this.permissionManager = new PermissionManager({
@@ -628,18 +628,23 @@ export class PulsarAssistantView {
     target: OpenaiLaunchTarget | CursorLaunchTarget,
     signal: AbortSignal,
   ): Promise<ModelInfo[]> {
+    const fetch = createProxyFetch(() =>
+      atom.config.get("pulsar-assistant.proxyUrl"),
+    );
     if (target.kind === "openai") {
       return fetchOpenAiModels({
         baseUrl: target.baseUrl,
         apiKey: target.apiKey,
         modelsUrl: target.modelsUrl,
         signal,
+        fetch,
       });
     }
     return fetchCursorModels({
       baseUrl: target.baseUrl,
       apiKey: target.apiKey,
       signal,
+      fetch,
     });
   }
 
@@ -800,26 +805,29 @@ export class PulsarAssistantView {
       void this.compactContext();
     });
 
-    this.sessionListView = new SessionListView({
-      getSessions: () =>
-        describeProjectSessions(this.projectSessions, {
-          activeAgentId: this.session.launchedAgent?.id ?? this.selectedAgentId,
-          agentNames: this.agentNames(),
-          allowDelete: this.session.canDeleteSession(),
-        }),
-      getActiveSessionId: () => this.session.sessionId,
-      onOpen: () => {
-        void this.refreshProjectSessions();
+    this.sessionListView = new SessionListModal(
+      {
+        getSessions: () =>
+          describeProjectSessions(this.projectSessions, {
+            activeAgentId: this.session.launchedAgent?.id ?? this.selectedAgentId,
+            agentNames: this.agentNames(),
+            allowDelete: this.session.canDeleteSession(),
+          }),
+        getActiveSessionId: () => this.session.sessionId,
+        onOpen: () => {
+          void this.refreshProjectSessions();
+        },
+        onSelect: (id, cwd) => {
+          this.openSession(id, cwd ?? undefined);
+        },
+        onDelete: (id, cwd) => {
+          this.confirmDeleteSession(id, cwd ?? undefined);
+        },
+        addTooltip: (element, title) =>
+          atom.tooltips.add(element, { title }),
       },
-      onSelect: (id, cwd) => {
-        this.openSession(id, cwd ?? undefined);
-      },
-      onDelete: (id, cwd) => {
-        this.confirmDeleteSession(id, cwd ?? undefined);
-      },
-      addTooltip: (element, title) =>
-        atom.tooltips.add(element, { title }),
-    });
+      this.subscriptions,
+    );
 
     this.attachments = new PromptAttachmentsView({
       isPathInProjectRoots: (filePath) =>
@@ -958,6 +966,10 @@ export class PulsarAssistantView {
 
     const footer = createElement("div", { class: "pulsar-assistant-footer" });
 
+    this.pinnedFilesPanel = new PinnedFilesView({
+      getPinnedFiles: () => this.session.getPinnedFiles(),
+      unpinFile: (path) => this.session.unpinFile(path),
+    });
 
     this.input = createElement("textarea", { class: ["pulsar-assistant-input", "native-key-bindings"] });
     this.input.setAttribute("rows", "3");
@@ -965,17 +977,16 @@ export class PulsarAssistantView {
       "placeholder",
       "Ask the agent\u2026  (Enter to send, Shift+Enter for newline)",
     );
-    this.input.setAttribute("aria-controls", this.slashMenuId);
     this.input.addEventListener("keydown", (event: KeyboardEvent) => {
       if (event.isComposing || event.keyCode === 229) return;
-      if (this.handleSlashKeydown(event)) return;
+      if (this.slashComposer.handleKeydown(event)) return;
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         this.send();
       }
     });
     this.input.addEventListener("input", () => {
-      this.updateSlashMenu();
+      this.slashComposer.update();
       this.updateContextProgress();
       this.updateInputControls();
     });
@@ -1036,19 +1047,53 @@ export class PulsarAssistantView {
     actions.appendChild(this.autoApproveButton);
 
     const actionButtons = createElement("div", { class: "pulsar-assistant-action-buttons" });
+
+    this.includeReasoningCheckbox = createElement("input");
+    this.includeReasoningCheckbox.type = "checkbox";
+    this.includeReasoningCheckbox.checked =
+      atom.config.get("pulsar-assistant.includeReasoning") !== false;
+    this.includeReasoningCheckbox.addEventListener("change", () => {
+      atom.config.set(
+        "pulsar-assistant.includeReasoning",
+        this.includeReasoningCheckbox.checked,
+      );
+    });
+    const includeReasoningLabel = createElement("label", {
+      class: "pulsar-assistant-include-reasoning",
+    });
+    includeReasoningLabel.appendChild(this.includeReasoningCheckbox);
+    includeReasoningLabel.appendChild(document.createTextNode("Thoughts"));
+    this.subscriptions.add(
+      atom.tooltips.add(includeReasoningLabel, {
+        title:
+          "Ask the model API to stream its reasoning (include_reasoning). Toggle off if a provider rejects the flag.",
+      }),
+    );
+
+    actionButtons.appendChild(includeReasoningLabel);
     actionButtons.appendChild(this.followButton);
     actionButtons.appendChild(this.stopButton);
     actionButtons.appendChild(this.sendButton);
 
+    this.slashComposer = new SlashComposer(
+      {
+        isBusy: () => this.isComposerBusy(),
+        getCommands: () => this.session.currentAvailableCommands(),
+        isEnabled: () => this.session.launchedAgent?.kind === "acp",
+      },
+      this.input,
+    );
+    this.subscriptions.add(this.slashComposer);
+
     footer.appendChild(this.attachments.getStripElement());
     footer.appendChild(this.statusBar.getElement());
-    footer.appendChild(this.buildSlashComposer());
+    footer.appendChild(this.pinnedFilesPanel.getElement());
+    footer.appendChild(this.slashComposer.element);
     footer.appendChild(actions);
     footer.appendChild(actionButtons);
 
     this.element.appendChild(header);
     this.element.appendChild(this.infoPanel);
-    this.element.appendChild(this.sessionListView.getPanelElement());
     this.conversationWrapper.appendChild(this.conversation);
     this.conversationWrapper.appendChild(this.chatPlaceholder.getElement());
     this.conversationWrapper.appendChild(this.loadingOverlay);
@@ -1066,6 +1111,8 @@ export class PulsarAssistantView {
     this.element.appendChild(this.conversationWrapper);
     this.element.appendChild(this.planBarView.getElement());
     this.element.appendChild(footer);
+
+    this.renderPinnedFiles();
   }
 
   private makeButton(label: string, onClick: () => void): HTMLButtonElement {
@@ -1073,6 +1120,10 @@ export class PulsarAssistantView {
     button.textContent = label;
     button.addEventListener("click", onClick);
     return button;
+  }
+
+  private renderPinnedFiles(): void {
+    this.pinnedFilesPanel?.refresh();
   }
 
   private buildConfigSelectors(): HTMLElement {
@@ -1574,30 +1625,9 @@ export class PulsarAssistantView {
 
   private send(): void {
     if (this.isComposerBusy()) return;
-    this.closeSlashMenu();
-    this.hideSlashHint();
+    this.slashComposer.close();
+    this.slashComposer.hideHint();
     void this.sendPrompt();
-  }
-
-  private buildSlashComposer(): HTMLElement {
-    const wrap = elementFromHtml(slashWrapTemplate(this.slashMenuId));
-
-    this.slashMenu = ref(wrap, "menu");
-    this.slashHint = ref(wrap, "hint");
-    wrap.insertBefore(this.input, this.slashHint);
-
-    const onDocPointerDown = (event: MouseEvent) => {
-      if (this.slashMenuOpen && !wrap.contains(event.target as Node)) {
-        this.closeSlashMenu();
-      }
-    };
-    document.addEventListener("mousedown", onDocPointerDown, true);
-    this.subscriptions.add(
-      new Disposable(() =>
-        document.removeEventListener("mousedown", onDocPointerDown, true),
-      ),
-    );
-    return wrap;
   }
 
   private isComposerBusy(): boolean {
@@ -1607,139 +1637,6 @@ export class PulsarAssistantView {
       this.preparingPrompt ||
       this.permissionManager.isAwaitingAuth()
     );
-  }
-
-  private slashQuery(): string | null {
-    const match = /^\/(\S*)$/.exec(this.input.value);
-    return match ? match[1] : null;
-  }
-
-  private updateSlashMenu(): void {
-    if (
-      !this.slashHintCommand ||
-      !this.input.value.startsWith(`/${this.slashHintCommand} `)
-    ) {
-      this.hideSlashHint();
-    }
-    const query = this.slashQuery();
-    if (query === null || this.isComposerBusy()) {
-      this.closeSlashMenu();
-      return;
-    }
-    const lower = query.toLowerCase();
-    const matches = this.session
-      .currentAvailableCommands()
-      .filter((command) => command.name.toLowerCase().startsWith(lower));
-    if (matches.length === 0) {
-      this.closeSlashMenu();
-      return;
-    }
-    this.slashMatches = matches;
-    this.slashActiveIndex = 0;
-    this.slashMenuOpen = true;
-    this.renderSlashMenu();
-    this.slashMenu.style.display = "";
-  }
-
-  private renderSlashMenu(): void {
-    this.slashMenu.innerHTML = "";
-    this.slashMatches.forEach((command, index) => {
-      const item = createElement("button", { class: ["pulsar-assistant-picker-item", "pulsar-assistant-slash-item"], id: `${this.slashMenuId}-item-${index}` });
-      item.setAttribute("role", "option");
-      item.tabIndex = -1;
-
-      const name = createElement("span", { class: "pulsar-assistant-slash-name" });
-      name.textContent = `/${command.name}`;
-      item.appendChild(name);
-      if (command.description) {
-        const desc = createElement("span", { class: "pulsar-assistant-slash-desc" });
-        desc.textContent = command.description;
-        item.appendChild(desc);
-      }
-      item.addEventListener("mousedown", (event) => {
-        event.preventDefault();
-        this.acceptSlashCommand(command);
-      });
-      this.slashMenu.appendChild(item);
-    });
-    this.applySlashActive();
-  }
-
-  private applySlashActive(): void {
-    const items = Array.from(this.slashMenu.children) as HTMLElement[];
-    items.forEach((item, index) => {
-      const active = index === this.slashActiveIndex;
-      item.classList.toggle("is-active", active);
-      item.setAttribute("aria-selected", active ? "true" : "false");
-      if (active) item.scrollIntoView({ block: "nearest" });
-    });
-    this.input.setAttribute(
-      "aria-activedescendant",
-      `${this.slashMenuId}-item-${this.slashActiveIndex}`,
-    );
-  }
-
-  private moveSlashActive(delta: number): void {
-    const count = this.slashMatches.length;
-    if (count === 0) return;
-    this.slashActiveIndex = (this.slashActiveIndex + delta + count) % count;
-    this.applySlashActive();
-  }
-
-  private handleSlashKeydown(event: KeyboardEvent): boolean {
-    if (!this.slashMenuOpen || this.slashMatches.length === 0) return false;
-    switch (event.key) {
-      case "ArrowDown":
-        event.preventDefault();
-        this.moveSlashActive(1);
-        return true;
-      case "ArrowUp":
-        event.preventDefault();
-        this.moveSlashActive(-1);
-        return true;
-      case "Enter":
-      case "Tab":
-        if (event.key === "Enter" && event.shiftKey) return false;
-        event.preventDefault();
-        this.acceptSlashCommand(this.slashMatches[this.slashActiveIndex]);
-        return true;
-      case "Escape":
-        event.preventDefault();
-        this.closeSlashMenu();
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  private acceptSlashCommand(command: acp.AvailableCommand): void {
-    this.closeSlashMenu();
-    this.input.value = `/${command.name} `;
-    this.input.focus();
-    this.input.selectionStart = this.input.selectionEnd = this.input.value.length;
-    if (command.description) this.showSlashHint(command.name, command.description);
-  }
-
-  private showSlashHint(commandName: string, description: string): void {
-    this.slashHintCommand = commandName;
-    this.slashHint.textContent = description;
-    this.slashHint.style.display = "";
-  }
-
-  private hideSlashHint(): void {
-    this.slashHintCommand = null;
-    this.slashHint.textContent = "";
-    this.slashHint.style.display = "none";
-  }
-
-  private closeSlashMenu(): void {
-    if (!this.slashMenuOpen) return;
-    this.slashMenuOpen = false;
-    this.slashMatches = [];
-    this.slashActiveIndex = 0;
-    this.slashMenu.style.display = "none";
-    this.slashMenu.innerHTML = "";
-    this.input.removeAttribute("aria-activedescendant");
   }
 
   private async sendPrompt(): Promise<void> {
@@ -1798,8 +1695,8 @@ export class PulsarAssistantView {
     );
     this.subscriptions.add(this.eventSubscription);
     this.clearConversation();
-    this.closeSlashMenu();
-    this.hideSlashHint();
+    this.slashComposer.close();
+    this.slashComposer.hideHint();
     this.attachments.setVisible(false);
     this.resetAgentChrome();
     this.resetSessionsChrome();
@@ -2332,7 +2229,8 @@ export class PulsarAssistantView {
         this.statusBar.setText(event.text);
         break;
       case "thought":
-        this.statusBar.setText(event.text);
+        this.currentTurnThought += event.text;
+        this.statusBar.setText(this.currentTurnThought);
         break;
       case "initialized":
         this.storedAgentInfo = event.info;
@@ -2357,7 +2255,8 @@ export class PulsarAssistantView {
         this.updateInputControls();
         break;
       case "turn-start":
-        this.closeSlashMenu();
+        this.slashComposer.close();
+        this.currentTurnThought = "";
         this.planBarView.clearCompletedActivePlanEntries();
         this.setAgentStatus("working");
         this.stopButton.disabled = false;
@@ -2381,6 +2280,9 @@ export class PulsarAssistantView {
         this.session.refreshSessionList();
         this.updateContextProgress();
         this.statusBar.clear();
+        break;
+      case "pinned-files-changed":
+        this.renderPinnedFiles();
         break;
       case "update":
         this.handleUpdate(event.sessionId, event.update);
@@ -2464,7 +2366,7 @@ export class PulsarAssistantView {
         this.renderConfigSelectors();
         break;
       case "available_commands_update":
-        this.updateSlashMenu();
+        this.slashComposer.update();
         break;
       case "usage_update":
         if (
@@ -2690,6 +2592,19 @@ export class PulsarAssistantView {
     return openFileLocation(filePath, line, (target) =>
       this.session.isPathInProjectRoots(target),
     );
+  }
+
+  private pinFile(filePath: string): void {
+    void (async () => {
+      try {
+        await this.session.pinFile(filePath);
+      } catch (error) {
+        this.statusBar.setText(errorMessage(error));
+        setTimeout(() => {
+          if (!this.currentTurnThought) this.statusBar.clear();
+        }, 4000);
+      }
+    })();
   }
 
   private appendNote(text: string): void {

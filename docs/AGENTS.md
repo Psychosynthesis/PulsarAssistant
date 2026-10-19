@@ -18,7 +18,8 @@
 - `session-storage.ts` — изолированное дисковое хранилище сессий и сообщений проекта.
 - `file-btree.ts` — сбалансированное B-дерево файлов проекта с индексированием и сохранением в tree.json.
 - `project-policy.ts` — разбор `pulsar-assistant.projects`.
-- `view/` — UI панели и glue для `atom.config`; вынесенные компоненты лежат в `view/components/` (`SessionListView`, `ChatPlaceholderView`, `PromptAttachmentsView`, `PlanBarView`, `ToolCallManager`, `PermissionManager`, `ComposerStatusBar`), общий слой работы с файлами — `view/file-navigation.ts`, чистая логика содержимого — в `view/empty-state-content.ts`.
+- `view/` — UI панели и glue для `atom.config`; вынесенные компоненты лежат в `view/components/` (`SessionListView`, `SessionListModal`, `SlashComposer`, `PinnedFilesView`, `ChatPlaceholderView`, `PromptAttachmentsView`, `PlanBarView`, `ToolCallManager`, `PermissionManager`, `ComposerStatusBar`), общий слой работы с файлами — `view/file-navigation.ts`, чистая логика содержимого — в `view/empty-state-content.ts`.
+- `paths.ts` — единый фасад нормализации путей проекта (`toPosixPath`, `escapesRoot`, `toProjectRelativePath`). Не дублируйте нормализацию слешей в других местах через `.replace(/\\/g, "/")` или `path.posix`.
 
 Порядок работы: `main` открывает `PulsarAssistantView` для корневой директории проекта → представление (view) управляет экземпляром `AgentSession` → сессия инстанцирует драйвер (`BuiltinBackend` или `AcpCliBackend`) и `EditorBackend` → бэкенд взаимодействует с моделью/CLI и редактором → представление отображает события.
 
@@ -34,6 +35,7 @@
 которые полностью решают проблему. Избегайте введения новых зависимостей,
 абстракций и настроек без явной необходимости. Пишите краткие и четкие сообщения коммитов, записи в журнале изменений и обновления
 документации — без лишних слов.
+- **Выносите UI в чистые компоненты.** Любой самостоятельный кусок интерфейса (выпадающий список, модалка, панель бейджей, строка статуса, блок вызова инструмента) оформляйте как отдельный компонент в `src/view/components/`, а не зашивайте DOM-логику в `AgentView` или другие крупные классы. Компонент владеет своим элементом (`getElement()`), получает данные и действия через узкий типизированный host-интерфейс (как `SlashComposer`, `SessionListModal`, `PinnedFilesView`) и не знает про `AgentView`. Родитель только создаёт компонент, подписывается на события и делегирует рендер (`refresh()`), без ручной сборки нод. Это правило и для новых фич, и при рефакторинге: не оставляйте рендер «под рукой» в монолите.
 - **Следуйте стандартам и практикам Pulsar.** Придерживайтесь соглашений, используемых ядром Pulsar и его пакетами
 (Octicons, команды, схема конфигурации, элементы панели, привязки клавиш, меню, API `atom`/Pulsar). В случае сомнений смотри, как это
 реализовано в существующих пакетах Pulsar.

@@ -165,6 +165,162 @@ test("OpenAiChatClient: non-stream emits Gemini thought:true as thought, not tex
   ]);
 });
 
+test("OpenAiChatClient: non-stream extracts <thinking>/<reasoning> tags into thought", async () => {
+  const fetchImpl = async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content:
+                "<thinking>deep plan</thinking>\n\n<reasoning>more</reasoning>\nfinal answer",
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.example/v1",
+    apiKey: "k",
+    stream: false,
+    fetch: fetchImpl,
+  });
+  const events = [];
+  for await (const event of client.complete(
+    { model: "dev", messages: [] },
+    new AbortController().signal,
+  )) {
+    events.push(event);
+  }
+  assert.deepEqual(events, [
+    { type: "thought", text: "deep plan\nmore" },
+    { type: "text", text: "final answer" },
+    { type: "done", finishReason: "stop" },
+  ]);
+});
+
+test("OpenAiChatClient: extracts reasoning_content and thought object from message", async () => {
+  const fetchImpl = async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content: "final",
+              reasoning_content: "traced",
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.example/v1",
+    apiKey: "k",
+    stream: false,
+    fetch: fetchImpl,
+  });
+  const events = [];
+  for await (const event of client.complete(
+    { model: "dev", messages: [] },
+    new AbortController().signal,
+  )) {
+    events.push(event);
+  }
+  assert.deepEqual(events, [
+    { type: "thought", text: "traced" },
+    { type: "text", text: "final" },
+    { type: "done", finishReason: "stop" },
+  ]);
+
+  const fetchThoughtObject = async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content: "final",
+              thought: { text: "object trace" },
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  const client2 = new OpenAiChatClient({
+    baseUrl: "https://api.example/v1",
+    apiKey: "k",
+    stream: false,
+    fetch: fetchThoughtObject,
+  });
+  const events2 = [];
+  for await (const event of client2.complete(
+    { model: "dev", messages: [] },
+    new AbortController().signal,
+  )) {
+    events2.push(event);
+  }
+  assert.deepEqual(events2, [
+    { type: "thought", text: "object trace" },
+    { type: "text", text: "final" },
+    { type: "done", finishReason: "stop" },
+  ]);
+});
+
+test("OpenAiChatClient: sends include_reasoning when enabled", async () => {
+  let capturedBody = null;
+  const fetchImpl = async (_url, init) => {
+    capturedBody = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+      { status: 200 },
+    );
+  };
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.example/v1",
+    apiKey: "k",
+    stream: false,
+    fetch: fetchImpl,
+    includeReasoning: true,
+  });
+  for await (const _event of client.complete(
+    { model: "dev", messages: [] },
+    new AbortController().signal,
+  )) {
+    // drain
+  }
+  assert.equal(capturedBody.include_reasoning, true);
+});
+
+test("OpenAiChatClient: omits include_reasoning when disabled", async () => {
+  let capturedBody = null;
+  const fetchImpl = async (_url, init) => {
+    capturedBody = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+      { status: 200 },
+    );
+  };
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.example/v1",
+    apiKey: "k",
+    stream: false,
+    fetch: fetchImpl,
+    includeReasoning: false,
+  });
+  for await (const _event of client.complete(
+    { model: "dev", messages: [] },
+    new AbortController().signal,
+  )) {
+    // drain
+  }
+  assert.equal("include_reasoning" in capturedBody, false);
+});
+
 test("OpenAiChatClient: non-stream extracts <think>/<thought> tags into thought", async () => {
   const fetchImpl = async () =>
     new Response(

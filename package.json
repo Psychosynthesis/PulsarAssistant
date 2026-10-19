@@ -1,7 +1,7 @@
 {
   "name": "pulsar-assistant",
   "main": "./lib/main.js",
-  "version": "0.7.5",
+  "version": "0.8.0",
   "description": "Coding agent for Pulsar",
   "keywords": [ "acp", "agent", "ai", "assistant", "chatgpt", "gpt", "llm" ],
   "license": "MIT",
@@ -67,6 +67,20 @@
     "zod": "^4.4.3"
   },
   "configSchema": {
+    "includeReasoning": {
+      "type": "boolean",
+      "default": true,
+      "order": 1,
+      "title": "Request model reasoning",
+      "description": "Ask the API to include model thoughts (include_reasoning). Some providers such as Gemini only stream their reasoning when this flag is sent. Disable it if a provider rejects the flag."
+    },
+    "proxyUrl": {
+      "type": "string",
+      "default": "",
+      "order": 2,
+      "title": "HTTP(S) proxy",
+      "description": "Optional proxy for all API requests. Format: http://HOST:PORT, https://HOST:PORT, or with credentials http://USER:PASS@HOST:PORT. Leave empty for a direct connection."
+    },
     "sendHostContext": {
       "type": "boolean",
       "default": true,

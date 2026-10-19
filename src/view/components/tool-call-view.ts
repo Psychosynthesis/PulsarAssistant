@@ -21,6 +21,7 @@ export type ToolUpdate = {
   toolCallId: string;
   status?: acp.ToolCallStatus;
   title?: string;
+  name?: string | null;
   kind?: acp.ToolKind;
   rawInput?: unknown;
   rawOutput?: unknown;
@@ -38,6 +39,7 @@ export interface ToolCallHost {
   renderToolContent?: (item: acp.ToolCallContent) => HTMLElement;
   makeButton?: (label: string, onClick: () => void) => HTMLButtonElement;
   onDeleteToolCall?: (toolCallId: string) => void;
+  pinFile?: (path: string) => void;
 }
 
 function rawOutputText(update: ToolUpdate): string | null {
@@ -202,6 +204,7 @@ export class ToolCallManager {
       toolCallId: toolCall.toolCallId,
       status: toolCall.status,
       title: toolCall.title,
+      name: toolCall.name,
       kind: toolCall.kind,
       rawInput: toolCall.rawInput,
       rawOutput: toolCall.rawOutput,
@@ -243,6 +246,27 @@ export class ToolCallManager {
           this.host.openLocation(loc.path, loc.line ?? undefined);
         });
         view.heading.insertBefore(link, view.status);
+      }
+
+      const isReadFile =
+        update.name === "read_file" ||
+        (typeof update.title === "string" && update.title.startsWith("Read "));
+      if (
+        isReadFile &&
+        this.host.pinFile &&
+        !view.heading.querySelector(".pulsar-assistant-pin")
+      ) {
+        const pin = createElement("button", {
+          class: ["btn-link", "pulsar-assistant-pin"],
+        }) as HTMLButtonElement;
+        pin.type = "button";
+        pin.textContent = "\u{1F4CC} Pin";
+        pin.title = "Pin to context";
+        pin.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.host.pinFile?.(loc.path);
+        });
+        view.heading.insertBefore(pin, view.status);
       }
     }
 

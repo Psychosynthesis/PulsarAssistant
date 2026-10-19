@@ -97,6 +97,30 @@
   background-color: @overlay-border-color;
 }
 
+// Pin-to-context button shown in read_file tool cards.
+.pulsar-assistant-pin {
+  appearance: none;
+  display: inline-block;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0 0 0 6px;
+  color: @text-color-info;
+  font-family: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover,
+  &:focus-visible {
+    text-decoration: underline;
+  }
+
+  &:focus {
+    outline: none;
+  }
+}
+
 // Shared file links shown inside tool and permission cards.
 .pulsar-assistant-location {
   appearance: none;

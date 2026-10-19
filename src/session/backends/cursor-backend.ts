@@ -25,6 +25,7 @@ import {
 } from "../../cursorClient";
 
 import type { CursorLaunchTarget } from "../../agent-config";
+import { createProxyFetch } from "../../proxy-fetch";
 import type { AgentEvent } from "../types";
 import type { AgentBackend, BackendInitResult } from "./backend";
 
@@ -159,12 +160,16 @@ export class CursorBackend implements AgentBackend {
     private readonly projectRoot: string,
     private readonly storageDir: string,
     private readonly emit: (event: AgentEvent) => void,
+    private readonly resolveProxyUrl?: () => string | null | undefined,
   ) {}
 
   async start(cwd: string): Promise<BackendInitResult> {
     this.client = new CursorClient({
       baseUrl: this.target.baseUrl,
       apiKey: this.target.apiKey,
+      ...(this.resolveProxyUrl
+        ? { fetch: createProxyFetch(this.resolveProxyUrl) }
+        : {}),
     });
     this.emit({
       type: "initialized",

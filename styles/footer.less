@@ -37,6 +37,58 @@
   }
 }
 
+// Pinned project files: badges shown above the composer. The panel collapses
+// completely when nothing is pinned.
+.pulsar-assistant-pinned-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: (@component-padding / 4);
+
+  .pulsar-assistant-pinned-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    padding: 2px 6px;
+    border: 1px solid @pane-item-border-color;
+    border-radius: @component-border-radius;
+    background-color: fade(@text-color-info, 8%);
+    color: @text-color-info;
+    font-size: 0.85em;
+
+    .pulsar-assistant-pinned-remove {
+      border: none;
+      background: none;
+      color: inherit;
+      font-size: 1.05em;
+      line-height: 1;
+      padding: 0 2px;
+      cursor: pointer;
+      opacity: 0.8;
+
+      &:hover {
+        opacity: 1;
+        color: @text-color-highlight;
+      }
+    }
+  }
+}
+
+.pulsar-assistant-include-reasoning {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  margin-right: auto;
+  font-size: 0.85em;
+  color: @text-color-subtle;
+  cursor: pointer;
+
+  input {
+    margin: 0;
+  }
+}
+
 .pulsar-assistant-action-buttons .btn {
   flex-shrink: 0;
 }

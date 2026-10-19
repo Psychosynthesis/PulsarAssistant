@@ -5,7 +5,12 @@ import {
   ContextAttachment,
 } from "../util";
 import type { LaunchTarget } from "../agent-config";
-import { deleteStoredSession } from "../session-storage";
+import {
+  deleteStoredSession,
+  loadPinnedFiles,
+  PINNED_FILES_LIMIT,
+  savePinnedFiles,
+} from "../session-storage";
 import type { StoredContextMessage } from "../session-storage";
 import {
   listProjectSessions as listStoredProjectSessions,
@@ -14,6 +19,7 @@ import {
   type ProjectSessionEntry,
 } from "./project-sessions";
 import { EditorBackend, PulsarEditorBackend } from "../editor";
+import { toProjectRelativePath } from "../paths";
 import { ProjectFileTree } from "../file-btree";
 import { ProjectFileTreeManager } from "./file-tree-manager";
 import {
@@ -44,6 +50,8 @@ export class AgentSession {
   private launchTarget: LaunchTarget | null = null;
   private startedTarget: LaunchTarget | null = null;
   private sessionListGeneration = 0;
+  private pinnedFiles: string[] = [];
+  private readonly pinnedReady: Promise<void>;
 
   constructor(
     private readonly projectRoot: string,
@@ -59,6 +67,61 @@ export class AgentSession {
       this.projectRoot,
       this.editor,
     );
+    this.pinnedReady = loadPinnedFiles(this.fileTreeManager.getStorageDir())
+      .then((files) => {
+        this.pinnedFiles = files.filter((f) => typeof f === "string");
+        if (this.pinnedFiles.length > 0) {
+          this.emit({
+            type: "pinned-files-changed",
+            files: this.getPinnedFiles(),
+          });
+        }
+      })
+      .catch((error) => {
+        console.error("[pulsar-assistant] failed to load pinned files", error);
+        this.pinnedFiles = [];
+      });
+  }
+
+  getPinnedFiles(): string[] {
+    return [...this.pinnedFiles];
+  }
+
+  private async persistPinnedFiles(): Promise<void> {
+    try {
+      await savePinnedFiles(
+        this.fileTreeManager.getStorageDir(),
+        this.pinnedFiles,
+      );
+    } catch (error) {
+      console.error("[pulsar-assistant] failed to save pinned files", error);
+    }
+  }
+
+  async pinFile(filePath: string): Promise<boolean> {
+    await this.pinnedReady;
+    const rel = toProjectRelativePath(this.projectRoot, filePath);
+    if (this.pinnedFiles.includes(rel)) return false;
+    if (this.pinnedFiles.length >= PINNED_FILES_LIMIT) {
+      throw new Error(
+        `Cannot pin more than ${PINNED_FILES_LIMIT} files to context.`,
+      );
+    }
+    this.pinnedFiles.push(rel);
+    await this.persistPinnedFiles();
+    this.emit({ type: "pinned-files-changed", files: this.getPinnedFiles() });
+    return true;
+  }
+
+  async unpinFile(filePath: string): Promise<boolean> {
+    await this.pinnedReady;
+    const rel = toProjectRelativePath(this.projectRoot, filePath);
+    const index = this.pinnedFiles.indexOf(rel);
+    if (index === -1) return false;
+    this.pinnedFiles.splice(index, 1);
+    await this.persistPinnedFiles();
+    this.emit({ type: "pinned-files-changed", files: this.getPinnedFiles() });
+    return true;
   }
 
   get sessionId(): string | null {
@@ -156,6 +219,10 @@ export class AgentSession {
 
     const cwd = await this.editor.resolveSessionCwd(this.projectRoot);
 
+    const resolveProxyUrl = (): string | null | undefined =>
+      this.editor.getProjectConfig<string>("pulsar-assistant.proxyUrl") ||
+      undefined;
+
     if (target.kind === "openai") {
       this.backend = new BuiltinBackend(
         target,
@@ -163,6 +230,8 @@ export class AgentSession {
         this.editor,
         this.fileTreeManager,
         (event: AgentEvent) => this.emit(event),
+        this,
+        resolveProxyUrl,
       );
     } else if (target.kind === "cursor") {
       this.backend = new CursorBackend(
@@ -170,6 +239,7 @@ export class AgentSession {
         this.projectRoot,
         this.fileTreeManager.getStorageDir(),
         (event: AgentEvent) => this.emit(event),
+        resolveProxyUrl,
       );
     } else {
       this.backend = new AcpCliBackend(

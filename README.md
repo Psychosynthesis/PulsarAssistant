@@ -148,6 +148,22 @@ By default, the builtin agent has no terminal access. To allow `run_command` or
 Keys are absolute project roots. The **Tool turns** input in the panel edits
 `maxTurnRequests` for the current project.
 
+### HTTP(S) proxy
+
+To route all API requests through a proxy, set the global package setting
+`proxyUrl` (visible in Pulsar's **Settings → Packages → Pulsar Assistant**):
+
+```cson
+"*":
+  "pulsar-assistant":
+    proxyUrl: "https://USER:PASS@proxy.example.com:8080"
+```
+
+`http://` and `https://` proxies are supported, with optional credentials in the
+URL. Leave the value empty for a direct connection. HTTPS destinations are
+tunnelled with `CONNECT`; plain-HTTP destinations are sent in absolute-form to
+the proxy.
+
 Spawned ACP CLIs still run as their own process and can execute commands without
 going through this package. Use the builtin API agent if you want these
 guards.

@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-21
+
+- **Pinned context**: the user can pin up to 5 key project files (via a 📌 button
+  on `read_file` calls and a badge strip above the composer). Pinned file
+  contents are re-read fresh from the editor (including unsaved buffers) into
+  every request, survive context compaction, and are trimmed at 800 lines to
+  prevent accidental bloat. The model can release a file with the new
+  `unpin_file` tool, and the system prompt tells it to do so once done.
+- **Reasoning round-trip fix**: model thoughts (Gemini `thought: true`,
+  `reasoning_content`, `reasoning_text`, `<thinking>`/`<reasoning>` tags) are
+  now accumulated per turn, saved as `reasoning_content` on assistant messages,
+  and passed back to the API — fixing `The reasoning_content in the thinking
+  mode must be passed back to the API` after message deletion or compaction.
+- **`include_reasoning` toggle**: a "Thoughts" checkbox under the composer
+  controls the `include_reasoning` request flag (on by default), so providers
+  that only stream reasoning when asked do so, and ones that reject the flag can
+  turn it off.
+- **Tool line-number hardening**: numeric tool arguments sent as strings
+  (`"340"`) are now coerced instead of being silently ignored, and `read_file` /
+  `write_diff` descriptions clarify that `line` is a 1-based start and `limit`
+  is a count, not an end line.
+- **`write_file` is full rewrite only**: `searchText`/`replaceText` were removed
+  from `write_file`; targeted edits belong to `write_diff`. This removes the
+  "replaces every occurrence" footgun that could duplicate lines.
+- **Tool execution context**: tools now receive a single typed
+  `ToolExecutionContext` instead of eight flat parameters, so new capabilities
+  no longer thread through every tool signature.
+- **Path facade**: a single `src/paths.ts` (`toPosixPath`, `escapesRoot`,
+  `toProjectRelativePath`) replaces scattered `.replace(/\\/g, "/")` and local
+  resolution helpers.
+- **View decomposition**: the slash command composer (`SlashComposer`), session
+  list modal (`SessionListModal`) and pinned-files badges (`PinnedFilesView`)
+  moved out of `AgentView` into `view/components/`.
+- **Streaming markdown guard**: unbalanced code fences are auto-closed before
+  `marked.parse()`, so an in-progress ``` block no longer makes the rendered
+  message "jump".
+- **HTTP(S) proxy support**: a global `proxyUrl` setting routes every API request
+  through an explicit `http://`/`https://` proxy, with credential support
+  (`http://USER:PASS@HOST:PORT`). HTTPS targets use `CONNECT` tunneling; HTTP
+  targets use absolute-form requests.
+
 ## [0.7.5] - 2026-09-21
 
 - **Write tools reject systemic placeholders**: `write_file` and `write_diff`

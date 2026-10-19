@@ -23,6 +23,7 @@ export interface StoredContextMessage {
   content: string | null;
   tool_calls?: ChatToolCall[];
   tool_call_id?: string;
+  reasoning_content?: string | null;
   metadata?: StoredToolCallMetadata;
 }
 
@@ -78,6 +79,43 @@ export function getSessionsDir(projectStorageDir: string): string {
 
 export function getProjectTreePath(projectStorageDir: string): string {
   return path.join(projectStorageDir, "tree.json");
+}
+
+export function getPinnedFilesPath(projectStorageDir: string): string {
+  return path.join(projectStorageDir, "pinned.json");
+}
+
+export const PINNED_FILES_LIMIT = 5;
+export const PINNED_FILE_MAX_LINES = 800;
+
+export async function loadPinnedFiles(
+  projectStorageDir: string,
+): Promise<string[]> {
+  const target = getPinnedFilesPath(projectStorageDir);
+  try {
+    const raw = await fs.promises.readFile(target, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.filter((p): p is string => typeof p === "string");
+    }
+    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    if (error instanceof SyntaxError) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+export async function savePinnedFiles(
+  projectStorageDir: string,
+  pinnedFiles: string[],
+): Promise<void> {
+  const target = getPinnedFilesPath(projectStorageDir);
+  await atomicWriteFile(target, JSON.stringify(pinnedFiles, null, 2));
 }
 
 function safeSessionFileName(sessionId: string): string {

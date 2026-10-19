@@ -15,6 +15,7 @@ export type AgentEvent =
   | { type: "session-list"; sessions: acp.SessionInfo[] }
   | { type: "turn-start" }
   | { type: "turn-end"; stopReason?: acp.StopReason }
+  | { type: "pinned-files-changed"; files: string[] }
   | { type: "update"; sessionId: acp.SessionId; update: acp.SessionUpdate }
   | { type: "permissions-cancelled" }
   | {

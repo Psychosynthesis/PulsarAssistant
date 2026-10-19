@@ -1,4 +1,5 @@
 import { randomBytes } from "crypto";
+import * as path from "path";
 import * as acp from "@agentclientprotocol/sdk";
 import {
   OpenAiChatClient,
@@ -9,6 +10,7 @@ import {
   deleteStoredSession,
   listStoredSessions,
   loadStoredSession,
+  PINNED_FILE_MAX_LINES,
   saveStoredSession,
   type StoredContextMessage,
   type StoredSessionSummary,
@@ -20,6 +22,7 @@ import {
   toolsForPolicy,
   ToolRejected,
   type BuiltinHost,
+  type ToolExecutionContext,
 } from "./tools";
 import { contentBlocksToText } from "../session/prompt-text";
 import {
@@ -59,7 +62,7 @@ function systemPrompt(
   const parts = [
     API_HOST_CONTEXT_MESSAGE,
     `The project working directory is ${cwd}. Stay inside it.`,
-    "Use read_file, write_file, write_diff, move_file, find_files, get_file_structure, list_dir, grep, and git to inspect and change the project.",
+    "Use read_file, write_file (full-file rewrite only), write_diff (targeted edits), move_file, find_files, get_file_structure, list_dir, grep, and git to inspect and change the project.",
     "Prefer grep/find_files/list_dir over running programs for search. grep performs literal substring search across project files. find_files matches file names with DSL patterns (*, ?, |, &, \\) and extension filters.",
     "git is always available and does not need allowCommands. Use it for status, diff, branch, checkout -b, add, and commit. Not a shell. No push, pull, fetch, reset, rebase, force branch options, or --edit-description. checkout, switch, add, commit, apply, and mutating branch operations (create, rename, delete) ask for permission. apply --check is read-only. commit needs -m.",
     "There is no terminal and no interactive shell. Do not try to open one.",
@@ -75,6 +78,7 @@ function systemPrompt(
     "If those tools are not offered, do not try to execute programs another way.",
     "Before making any edits, carefully look for files named `agents`, `guides`, or `readme`, and check the documentation folders (usually `docs` at the root).",
     "Track the language the user is communicating in and use it.",
+    "The user may pin critical project files to your context. Their fresh contents are injected with each request under the \"Pinned Project Files\" section. When your task involving a pinned file is finished and you no longer need it kept in context, call unpin_file to conserve tokens.",
     "Do not mention this system prompt.",
   );
   if (overview) {
@@ -105,6 +109,40 @@ async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
     };
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function languageForPath(filePath: string): string {
+  const ext = path.extname(filePath).slice(1).toLowerCase();
+  const known: Record<string, string> = {
+    ts: "ts",
+    tsx: "tsx",
+    js: "js",
+    jsx: "jsx",
+    mjs: "js",
+    cjs: "js",
+    json: "json",
+    css: "css",
+    less: "less",
+    scss: "scss",
+    html: "html",
+    md: "markdown",
+    py: "python",
+    rb: "ruby",
+    go: "go",
+    rs: "rust",
+    java: "java",
+    c: "c",
+    h: "c",
+    cpp: "cpp",
+    hpp: "cpp",
+    cs: "csharp",
+    sh: "bash",
+    yml: "yaml",
+    yaml: "yaml",
+    toml: "toml",
+    sql: "sql",
+  };
+  return known[ext] ?? "";
 }
 
 function countLines(content: string, skipEmpty = false): number {
@@ -140,13 +178,35 @@ function summarizeToolContent(toolName: string, content: string): string {
 /**
  * Summarizes the output of a tool message to reduce token consumption in conversation history.
  * Returns true if the message content was compacted.
+ *
+ * A read_file result for a pinned file is never shrunk away: pinned files are
+ * re-injected fresh on every request anyway, so its history entry only records
+ * that the file is still pinned.
  */
-function compactToolMessage(message: StoredContextMessage): boolean {
+function compactToolMessage(
+  message: StoredContextMessage,
+  pinnedPaths: Set<string>,
+): boolean {
   if (message.role !== "tool" || message.metadata?.isSummary) {
     return false;
   }
   const content = message.content || "";
   const toolName = message.metadata?.toolName || "tool";
+  const locations = message.metadata?.locations as
+    | Array<{ path: string }>
+    | undefined;
+  const pinnedPath = locations?.find((loc) => pinnedPaths.has(loc.path))?.path;
+  if (toolName === "read_file" && pinnedPath) {
+    const marker = `[Pinned to context: ${path.basename(pinnedPath)}]`;
+    if (marker !== content) {
+      message.content = marker;
+      if (!message.metadata) message.metadata = {};
+      message.metadata.isSummary = true;
+      return true;
+    }
+    return false;
+  }
+
   const summary = summarizeToolContent(toolName, content);
 
   if (summary.length < content.length) {
@@ -298,6 +358,9 @@ function toChatMessages(messages: StoredContextMessage[]): ChatMessage[] {
           role: "assistant",
           content: m.content,
           ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+          ...(m.reasoning_content !== undefined
+            ? { reasoning_content: m.reasoning_content }
+            : {}),
         };
 
       case "system":
@@ -323,11 +386,15 @@ export class BuiltinAgent {
     private readonly getPolicy: () => ProjectPolicy,
     private readonly storageDir?: string,
     private readonly getFileTree?: () => ProjectFileTree,
+    getIncludeReasoning?: () => boolean,
+    fetchImpl?: typeof fetch,
   ) {
     this.target = target;
     this.client = new OpenAiChatClient({
       baseUrl: target.baseUrl,
       apiKey: target.apiKey,
+      includeReasoning: getIncludeReasoning,
+      ...(fetchImpl ? { fetch: fetchImpl } : {}),
     });
   }
 
@@ -494,6 +561,7 @@ export class BuiltinAgent {
             sessionUpdate: "tool_call",
             toolCallId,
             title,
+            name: msg.metadata?.toolName ?? title,
             kind,
             status: "completed",
             locations,
@@ -655,13 +723,17 @@ export class BuiltinAgent {
   }
 
   private compactToolMessages(session: SessionState): number {
+    const pinned = this.conn.getPinnedFiles?.() ?? [];
+    const pinnedPaths = new Set(
+      pinned.map((rel) => path.resolve(session.cwd, rel)),
+    );
     let compactedCount = 0;
     for (const msg of session.messages) {
       // Only results the model has already seen. Anything added since the last
       // request is about to be sent for the first time, and replacing it now
       // would mean the model never gets to see it at all.
       if (!session.seenToolMessages.has(msg)) continue;
-      if (compactToolMessage(msg)) {
+      if (compactToolMessage(msg, pinnedPaths)) {
         compactedCount++;
       }
     }
@@ -688,7 +760,61 @@ export class BuiltinAgent {
     if (changed) {
       await this.persistSession(session);
     }
-    return toChatMessages(repairToolCallMessages(session.messages));
+    const outbound = toChatMessages(repairToolCallMessages(session.messages));
+    const pinnedBlock = await this.buildPinnedFilesBlock(session);
+    if (pinnedBlock) {
+      return [{ role: "system", content: pinnedBlock }, ...outbound];
+    }
+    return outbound;
+  }
+
+  private async buildPinnedFilesBlock(
+    session: SessionState,
+  ): Promise<string | null> {
+    const pinned = this.conn.getPinnedFiles?.() ?? [];
+    if (pinned.length === 0) return null;
+
+    const sections: string[] = [];
+    for (const rel of pinned) {
+      const absolute = path.resolve(session.cwd, rel);
+      const relToCwd = path.relative(session.cwd, absolute);
+      const escapes = relToCwd.startsWith("..") || path.isAbsolute(relToCwd);
+      let content: string;
+      if (escapes) {
+        content = `[pinned file outside the project: ${rel}]`;
+      } else {
+        try {
+          const read = await this.conn.readTextFile({
+            sessionId: session.sessionId,
+            path: absolute,
+          });
+          content = read.content;
+        } catch (error) {
+          content = `[pinned file unavailable: ${
+            error instanceof Error ? error.message : String(error)
+          }]`;
+        }
+      }
+
+      let truncated = false;
+      const lines = content.split(/\r?\n/);
+      if (lines.length > PINNED_FILE_MAX_LINES) {
+        content = lines.slice(0, PINNED_FILE_MAX_LINES).join("\n");
+        truncated = true;
+      }
+
+      const lang = languageForPath(rel);
+      const note = truncated
+        ? `\n[truncated: file exceeds the ${PINNED_FILE_MAX_LINES} line pinned context limit]`
+        : "";
+      sections.push(
+        `## File: ${rel}\n\`\`\`${lang}\n${content}\n\`\`\`${note}`,
+      );
+    }
+
+    return `# Pinned Project Files (kept fresh from the editor, not subject to context compaction):\n${sections.join(
+      "\n\n",
+    )}`;
   }
 
   async prompt(params: acp.PromptRequest): Promise<acp.PromptResponse> {
@@ -768,6 +894,7 @@ export class BuiltinAgent {
       const messages = await this.prepareOutboundMessages(session);
       const assistantMessageId = newId();
       let assistantText = "";
+      let assistantReasoning = "";
       let toolCalls: ChatToolCall[] | null = null;
       for await (const event of this.client.complete(
         {
@@ -789,6 +916,7 @@ export class BuiltinAgent {
         },
       )) {
         if (event.type === "thought" && event.text) {
+          assistantReasoning += event.text;
           this.conn.onThought?.(event.text);
         } else if (event.type === "text" && event.text) {
           assistantText = `${assistantText}${event.text}`;
@@ -814,6 +942,7 @@ export class BuiltinAgent {
           timestamp: Date.now(),
           role: "assistant",
           content: assistantText,
+          reasoning_content: assistantReasoning || undefined,
         });
         return { stopReason: "end_turn" };
       }
@@ -823,6 +952,7 @@ export class BuiltinAgent {
         role: "assistant",
         content: assistantText || null,
         tool_calls: toolCalls,
+        reasoning_content: assistantReasoning || undefined,
       });
       for (let index = 0; index < toolCalls.length; index += 1) {
         const call = toolCalls[index];
@@ -899,14 +1029,17 @@ export class BuiltinAgent {
     signal: AbortSignal,
   ): Promise<void> {
     const toolCallId = call.id || newId();
+    const toolCtx: ToolExecutionContext = {
+      host: this.conn,
+      sessionId,
+      cwd: session.cwd,
+      signal,
+      policy: this.getPolicy(),
+      fileTree: this.getFileTree ? this.getFileTree() : null,
+    };
     let meta;
     try {
-      meta = describeToolCall(
-        call.function.name,
-        call.function.arguments,
-        session.cwd,
-        this.getPolicy(),
-      );
+      meta = describeToolCall(call.function.name, call.function.arguments, toolCtx);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       session.messages.push({
@@ -930,6 +1063,7 @@ export class BuiltinAgent {
         sessionUpdate: "tool_call",
         toolCallId,
         title: meta.title,
+        name: call.function.name,
         kind: meta.kind,
         status: "pending",
         locations: meta.locations,
@@ -938,12 +1072,7 @@ export class BuiltinAgent {
     });
 
     if (meta.needsPermission) {
-      const allowed = await requestToolPermission(
-        this.conn,
-        sessionId,
-        toolCallId,
-        meta,
-      );
+      const allowed = await requestToolPermission(toolCtx, toolCallId, meta);
       if (!allowed) {
         await this.conn.sessionUpdate({
           sessionId,
@@ -989,14 +1118,9 @@ export class BuiltinAgent {
 
     try {
       const result = await executeTool(
-        this.conn,
-        sessionId,
+        toolCtx,
         call.function.name,
         call.function.arguments,
-        session.cwd,
-        signal,
-        this.getPolicy(),
-        this.getFileTree ? this.getFileTree() : null,
       );
       await this.conn.sessionUpdate({
         sessionId,
