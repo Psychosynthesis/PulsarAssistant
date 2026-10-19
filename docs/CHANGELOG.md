@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-09-21
+
+- **Streaming hang fix**: the OpenAI-compatible stream now treats
+  `finish_reason` as the end-of-generation signal, in addition to `[DONE]` and
+  connection close. Gateways that send the final `finish_reason` chunk but never
+  emit `[DONE]` (and keep the connection open) no longer leave the agent stuck
+  in silence. Cancelling a turn now also unblocks a hung `reader.read()` by
+  cancelling the underlying stream.
+
 ## [0.8.0] - 2026-09-21
 
 - **Pinned context**: the user can pin up to 5 key project files (via a 📌 button
