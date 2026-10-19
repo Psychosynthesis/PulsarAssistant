@@ -114,6 +114,8 @@ export class SessionListView {
   private readonly rowsHost: HTMLElement;
   private readonly tooltips = new Set<Disposable>();
   private readonly toggleTooltip: Disposable;
+  private readonly keydownHandler: (event: KeyboardEvent) => void;
+  private listening = false;
   private open = false;
   private available = false;
   private busy = false;
@@ -131,6 +133,12 @@ export class SessionListView {
 
     this.panel = elementFromHtml(SESSION_LIST_PANEL);
     this.rowsHost = ref(this.panel, "rows");
+    this.keydownHandler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        this.close();
+        this.toggle.focus();
+      }
+    };
   }
 
   getToggleElement(): HTMLButtonElement {
@@ -153,6 +161,7 @@ export class SessionListView {
   openPanel(): void {
     if (this.open) return;
     this.open = true;
+    this.startListening();
     this.host.onOpen();
     this.syncVisibility();
   }
@@ -168,6 +177,7 @@ export class SessionListView {
   close(): void {
     if (!this.open) return;
     this.open = false;
+    this.stopListening();
     this.syncVisibility();
   }
 
@@ -182,11 +192,24 @@ export class SessionListView {
   }
 
   dispose(): void {
+    this.stopListening();
     for (const tooltip of this.tooltips) tooltip.dispose();
     this.tooltips.clear();
     this.toggleTooltip.dispose();
     this.toggle.remove();
     this.panel.remove();
+  }
+
+  private startListening(): void {
+    if (this.listening) return;
+    this.listening = true;
+    document.addEventListener("keydown", this.keydownHandler);
+  }
+
+  private stopListening(): void {
+    if (!this.listening) return;
+    this.listening = false;
+    document.removeEventListener("keydown", this.keydownHandler);
   }
 
   private syncVisibility(): void {

@@ -78,7 +78,7 @@ function systemPrompt(
     "If those tools are not offered, do not try to execute programs another way.",
     "Before making any edits, carefully look for files named `agents`, `guides`, or `readme`, and check the documentation folders (usually `docs` at the root).",
     "Track the language the user is communicating in and use it.",
-    "The user may pin critical project files to your context. Their fresh contents are injected with each request under the \"Pinned Project Files\" section. When your task involving a pinned file is finished and you no longer need it kept in context, call unpin_file to conserve tokens.",
+    "The user may pin critical project files to your context. Pinned files are injected with their fresh contents on EVERY request under the \"Pinned Project Files\" section — those contents are ALREADY in your context. Do NOT call read_file on a pinned file; read its contents from that section instead. When you finish working with a pinned file and no longer need it in context, call unpin_file to remove it and conserve tokens.",
     "Do not mention this system prompt.",
   );
   if (overview) {
@@ -763,7 +763,13 @@ export class BuiltinAgent {
     const outbound = toChatMessages(repairToolCallMessages(session.messages));
     const pinnedBlock = await this.buildPinnedFilesBlock(session);
     if (pinnedBlock) {
-      return [{ role: "system", content: pinnedBlock }, ...outbound];
+      const systemIndex = outbound.findIndex((message) => message.role === "system");
+      if (systemIndex !== -1) {
+        const system = outbound[systemIndex];
+        system.content = `${system.content}\n\n${pinnedBlock}`;
+      } else {
+        outbound.unshift({ role: "system", content: pinnedBlock });
+      }
     }
     return outbound;
   }
@@ -812,7 +818,7 @@ export class BuiltinAgent {
       );
     }
 
-    return `# Pinned Project Files (kept fresh from the editor, not subject to context compaction):\n${sections.join(
+    return `# Pinned Project Files (always in context; contents are re-read from the editor each turn):\n${sections.join(
       "\n\n",
     )}`;
   }

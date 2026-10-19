@@ -49,7 +49,7 @@ import {
   TestCommandModal,
   BuildCommandModal,
 } from "./components/test-command-modal";
-import { SessionListModal } from "./components/session-list-modal";
+import { SessionListView } from "./components/session-list-view";
 import { SlashComposer } from "./components/slash-composer";
 import { createProxyFetch } from "../proxy-fetch";
 import { PinnedFilesView } from "./components/pinned-files-view";
@@ -166,7 +166,7 @@ export class PulsarAssistantView {
   private modelSelectorWrap!: HTMLElement;
   private modelSelector!: ModelSelector;
   private contextProgressBar!: ContextProgressBar;
-  private sessionListView!: SessionListModal;
+  private sessionListView!: SessionListView;
   private chatPlaceholder!: ChatPlaceholderView;
   private compactButton!: HTMLButtonElement;
   private newSessionButton!: HTMLButtonElement;
@@ -805,29 +805,25 @@ export class PulsarAssistantView {
       void this.compactContext();
     });
 
-    this.sessionListView = new SessionListModal(
-      {
-        getSessions: () =>
-          describeProjectSessions(this.projectSessions, {
-            activeAgentId: this.session.launchedAgent?.id ?? this.selectedAgentId,
-            agentNames: this.agentNames(),
-            allowDelete: this.session.canDeleteSession(),
-          }),
-        getActiveSessionId: () => this.session.sessionId,
-        onOpen: () => {
-          void this.refreshProjectSessions();
-        },
-        onSelect: (id, cwd) => {
-          this.openSession(id, cwd ?? undefined);
-        },
-        onDelete: (id, cwd) => {
-          this.confirmDeleteSession(id, cwd ?? undefined);
-        },
-        addTooltip: (element, title) =>
-          atom.tooltips.add(element, { title }),
+    this.sessionListView = new SessionListView({
+      getSessions: () =>
+        describeProjectSessions(this.projectSessions, {
+          activeAgentId: this.session.launchedAgent?.id ?? this.selectedAgentId,
+          agentNames: this.agentNames(),
+          allowDelete: this.session.canDeleteSession(),
+        }),
+      getActiveSessionId: () => this.session.sessionId,
+      onOpen: () => {
+        void this.refreshProjectSessions();
       },
-      this.subscriptions,
-    );
+      onSelect: (id, cwd) => {
+        this.openSession(id, cwd ?? undefined);
+      },
+      onDelete: (id, cwd) => {
+        this.confirmDeleteSession(id, cwd ?? undefined);
+      },
+      addTooltip: (element, title) => atom.tooltips.add(element, { title }),
+    });
 
     this.attachments = new PromptAttachmentsView({
       isPathInProjectRoots: (filePath) =>
@@ -1093,6 +1089,7 @@ export class PulsarAssistantView {
     footer.appendChild(actionButtons);
 
     this.element.appendChild(header);
+    this.element.appendChild(this.sessionListView.getPanelElement());
     this.element.appendChild(this.infoPanel);
     this.conversationWrapper.appendChild(this.conversation);
     this.conversationWrapper.appendChild(this.chatPlaceholder.getElement());

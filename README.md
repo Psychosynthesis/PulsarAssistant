@@ -125,7 +125,6 @@ Required fields:
 Optional fields:
 
 - `modelsUrl`: override endpoint for fetching models (defaults to `{baseUrl}/models`)
-- `systemPrompt`: custom system instructions prepended to every conversation turn
 
 ### Project commands and tests
 

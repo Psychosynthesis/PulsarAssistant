@@ -16,7 +16,7 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
     function: {
       name: "read_file",
       description:
-        "Read a text file in the project. Path may be absolute or relative to the project root.",
+        "Read a text file in the project. Path may be absolute or relative to the project root. If the file is already listed under the \"Pinned Project Files\" section of your system context, its contents are already available there — do not read it again.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -306,7 +306,7 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
     function: {
       name: "unpin_file",
       description:
-        "Unpin a previously pinned file from the project context once work on it is complete. Important! Don't forget to detach the files once the task is complete.",
+        "Remove a file from the pinned context. A pinned file is re-injected into your context on every turn until you unpin it; call this when you no longer need it in context to conserve tokens.",
       parameters: {
         type: "object",
         additionalProperties: false,

@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `toProjectRelativePath`) replaces scattered `.replace(/\\/g, "/")` and local
   resolution helpers.
 - **View decomposition**: the slash command composer (`SlashComposer`), session
-  list modal (`SessionListModal`) and pinned-files badges (`PinnedFilesView`)
+  list panel (`SessionListView`) and pinned-files badges (`PinnedFilesView`)
   moved out of `AgentView` into `view/components/`.
 - **Streaming markdown guard**: unbalanced code fences are auto-closed before
   `marked.parse()`, so an in-progress ``` block no longer makes the rendered
