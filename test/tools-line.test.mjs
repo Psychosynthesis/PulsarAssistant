@@ -43,11 +43,15 @@ function makeCtx(host, cwd) {
   };
 }
 
+// Tool `path` arguments are project-relative (resolved against cwd), so the
+// tests below pass "a.txt" rather than an absolute path.
+const REL = "a.txt";
+
 test("read_file: line is a 1-based start, limit is a count", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tools-line-"));
   const backend = new PulsarEditorBackend();
   const host = makeHost(backend);
-  const file = path.join(tmpDir, "a.txt");
+  const file = path.join(tmpDir, REL);
   const content = Array.from({ length: 5 }, (_, i) => `L${i + 1}`).join("\n") + "\n";
   await backend.writeTextFile(file, content);
 
@@ -55,14 +59,14 @@ test("read_file: line is a 1-based start, limit is a count", async () => {
     const full = await executeTool(
       makeCtx(host, tmpDir),
       "read_file",
-      JSON.stringify({ path: file }),
+      JSON.stringify({ path: REL }),
     );
     assert.equal(full.output, "L1\nL2\nL3\nL4\nL5\n");
 
     const slice = await executeTool(
       makeCtx(host, tmpDir),
       "read_file",
-      JSON.stringify({ path: file, line: 2, limit: 2 }),
+      JSON.stringify({ path: REL, line: 2, limit: 2 }),
     );
     assert.equal(slice.output, "L2\nL3");
 
@@ -70,7 +74,7 @@ test("read_file: line is a 1-based start, limit is a count", async () => {
     const strSlice = await executeTool(
       makeCtx(host, tmpDir),
       "read_file",
-      JSON.stringify({ path: file, line: "3", limit: "1" }),
+      JSON.stringify({ path: REL, line: "3", limit: "1" }),
     );
     assert.equal(strSlice.output, "L3");
   } finally {
@@ -82,14 +86,14 @@ test("write_diff: startLine/endLine replace an inclusive 1-based range", async (
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tools-line-"));
   const backend = new PulsarEditorBackend();
   const host = makeHost(backend);
-  const file = path.join(tmpDir, "a.txt");
+  const file = path.join(tmpDir, REL);
   await backend.writeTextFile(file, "a\nb\nc\nd\n");
 
   try {
     await executeTool(
       makeCtx(host, tmpDir),
       "write_diff",
-      JSON.stringify({ path: file, startLine: 2, endLine: 3, replace: "X\nY" }),
+      JSON.stringify({ path: REL, startLine: 2, endLine: 3, replace: "X\nY" }),
     );
     assert.equal(
       await (await backend.readTextFile(file)).content,
@@ -100,7 +104,7 @@ test("write_diff: startLine/endLine replace an inclusive 1-based range", async (
     await executeTool(
       makeCtx(host, tmpDir),
       "write_diff",
-      JSON.stringify({ path: file, startLine: 1, replace: "HEAD" }),
+      JSON.stringify({ path: REL, startLine: 1, replace: "HEAD" }),
     );
     assert.equal(
       await (await backend.readTextFile(file)).content,
@@ -115,14 +119,14 @@ test("write_diff: preserves CRLF line endings for line-range edits", async () =>
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tools-line-"));
   const backend = new PulsarEditorBackend();
   const host = makeHost(backend);
-  const file = path.join(tmpDir, "a.txt");
+  const file = path.join(tmpDir, REL);
   await backend.writeTextFile(file, "a\r\nb\r\nc\r\n");
 
   try {
     await executeTool(
       makeCtx(host, tmpDir),
       "write_diff",
-      JSON.stringify({ path: file, startLine: 2, replace: "B" }),
+      JSON.stringify({ path: REL, startLine: 2, replace: "B" }),
     );
     assert.equal(
       await (await backend.readTextFile(file)).content,
@@ -137,14 +141,14 @@ test("write_file: full content overwrites the file", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tools-line-"));
   const backend = new PulsarEditorBackend();
   const host = makeHost(backend);
-  const file = path.join(tmpDir, "a.txt");
+  const file = path.join(tmpDir, REL);
   await backend.writeTextFile(file, "old\n");
 
   try {
     const result = await executeTool(
       makeCtx(host, tmpDir),
       "write_file",
-      JSON.stringify({ path: file, content: "new\ncontents\n" }),
+      JSON.stringify({ path: REL, content: "new\ncontents\n" }),
     );
     assert.equal(
       await (await backend.readTextFile(file)).content,
@@ -160,7 +164,7 @@ test("write_file: rejects searchText/replaceText and points to write_diff", asyn
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tools-line-"));
   const backend = new PulsarEditorBackend();
   const host = makeHost(backend);
-  const file = path.join(tmpDir, "a.txt");
+  const file = path.join(tmpDir, REL);
   await backend.writeTextFile(file, "x = 1\n");
 
   try {
@@ -168,7 +172,7 @@ test("write_file: rejects searchText/replaceText and points to write_diff", asyn
       executeTool(
         makeCtx(host, tmpDir),
         "write_file",
-        JSON.stringify({ path: file, searchText: "x", replaceText: "z" }),
+        JSON.stringify({ path: REL, searchText: "x", replaceText: "z" }),
       ),
       /use write_diff/i,
     );
