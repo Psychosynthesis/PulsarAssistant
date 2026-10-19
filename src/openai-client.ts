@@ -434,11 +434,21 @@ export class OpenAiChatClient {
       { id: string; name: string; arguments: string }
     >();
     let finishReason = "stop";
+    // Some gateways send the terminal choice chunk with `finish_reason` but
+    // never emit `data: [DONE]` and keep the connection open. `finish_reason`
+    // is the protocol's own end-of-generation signal, so stop on it instead of
+    // waiting for `[DONE]` and hanging forever.
+    let finishSeen = false;
     let receivedBytes = 0;
     const tagFilter = new StreamingTagFilter();
-    for await (const payload of readSseData(response.body, signal, (bytes) => {
-      receivedBytes += bytes;
-    })) {
+    for await (const payload of readSseData(
+      response.body,
+      signal,
+      (bytes) => {
+        receivedBytes += bytes;
+      },
+      () => finishSeen,
+    )) {
       if (payload === "[DONE]") break;
       let parsed: ChatCompletionResponse;
       try {
@@ -448,8 +458,11 @@ export class OpenAiChatClient {
       }
       const choice = parsed.choices?.[0];
       if (!choice) continue;
-      if (choice.finish_reason) finishReason = choice.finish_reason;
       const delta = choice.delta as Record<string, unknown> | undefined;
+      const deltaFinishReason = (delta as { finish_reason?: string } | undefined)
+        ?.finish_reason;
+      const choiceFinishReason = choice.finish_reason ?? deltaFinishReason;
+      if (choiceFinishReason) finishReason = choiceFinishReason;
       const deltaReasoning = extractReasoning(delta);
       const reasoningInfo = deltaReasoning.reasoningText
         ? deltaReasoning
@@ -474,6 +487,7 @@ export class OpenAiChatClient {
         if (part.function?.arguments) current.arguments += part.function.arguments;
         pending.set(index, current);
       }
+      if (choiceFinishReason) finishSeen = true;
     }
     for (const item of tagFilter.flush()) {
       yield item;
@@ -585,13 +599,25 @@ async function* readSseData(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   onBytes?: (bytes: number) => void,
+  stop?: () => boolean,
 ): AsyncIterable<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+
+  // reader.read() does not observe `signal` on its own, so cancelling the
+  // reader is what actually unblocks a hung read when the caller aborts.
+  const cancel = () => {
+    void reader.cancel().catch(() => {});
+  };
+  const onAbort = () => cancel();
+  signal.addEventListener("abort", onAbort, { once: true });
+
   try {
-    while (!signal.aborted) {
+    outer: while (true) {
+      if (signal.aborted || stop?.()) break;
       const { done, value } = await reader.read();
+      if (signal.aborted) break;
       if (done) break;
       onBytes?.(value.byteLength);
       buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
@@ -600,12 +626,19 @@ async function* readSseData(
         const raw = buffer.slice(0, separator);
         buffer = buffer.slice(separator + 2);
         const data = sseData(raw);
-        if (data !== null) yield data;
+        if (data === null) continue;
+        yield data;
+        if (signal.aborted || stop?.()) {
+          break outer;
+        }
       }
     }
-    const trailing = sseData(buffer);
-    if (trailing !== null) yield trailing;
+    if (!signal.aborted && !stop?.()) {
+      const trailing = sseData(buffer);
+      if (trailing !== null) yield trailing;
+    }
   } finally {
+    signal.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
 }

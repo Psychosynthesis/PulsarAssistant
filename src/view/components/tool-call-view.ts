@@ -15,6 +15,8 @@ export interface ToolView {
   diff: boolean;
   location: acp.ToolCallLocation | null;
   locationTooltip: Disposable | null;
+  pinButton: HTMLButtonElement | null;
+  readFile: boolean;
 }
 
 export type ToolUpdate = {
@@ -40,6 +42,7 @@ export interface ToolCallHost {
   makeButton?: (label: string, onClick: () => void) => HTMLButtonElement;
   onDeleteToolCall?: (toolCallId: string) => void;
   pinFile?: (path: string) => void;
+  isPinned?: (path: string) => boolean;
 }
 
 function rawOutputText(update: ToolUpdate): string | null {
@@ -192,6 +195,8 @@ export class ToolCallManager {
       diff: false,
       location: null,
       locationTooltip: null,
+      pinButton: null,
+      readFile: false,
     };
     this.toolViews.set(toolCall.toolCallId, toolView);
 
@@ -248,27 +253,12 @@ export class ToolCallManager {
         view.heading.insertBefore(link, view.status);
       }
 
-      const isReadFile =
+      view.readFile =
         update.name === "read_file" ||
         (typeof update.title === "string" && update.title.startsWith("Read "));
-      if (
-        isReadFile &&
-        this.host.pinFile &&
-        !view.heading.querySelector(".pulsar-assistant-pin")
-      ) {
-        const pin = createElement("button", {
-          class: ["btn-link", "pulsar-assistant-pin"],
-        }) as HTMLButtonElement;
-        pin.type = "button";
-        pin.textContent = "\u{1F4CC} Pin";
-        pin.title = "Pin to context";
-        pin.addEventListener("click", (e) => {
-          e.stopPropagation();
-          this.host.pinFile?.(loc.path);
-        });
-        view.heading.insertBefore(pin, view.status);
-      }
     }
+
+    this.syncPinState(view);
 
     const hasContent = update.content && update.content.length > 0;
     const hasRaw = update.rawInput != null || update.rawOutput != null;
@@ -313,6 +303,48 @@ export class ToolCallManager {
       setCollapsed(view, true);
     } else if (!view.expanded) {
       view.summary.style.display = summaryText ? "" : "none";
+    }
+  }
+
+  private syncPinState(view: ToolView): void {
+    if (!view.readFile || !view.location || !this.host.pinFile) {
+      if (view.pinButton) {
+        view.pinButton.remove();
+        view.pinButton = null;
+      }
+      return;
+    }
+
+    const pinned = this.host.isPinned?.(view.location.path) ?? false;
+
+    if (!view.pinButton) {
+      view.pinButton = createElement("button", {
+        class: ["btn-link", "pulsar-assistant-pin"],
+      }) as HTMLButtonElement;
+      view.pinButton.type = "button";
+      view.pinButton.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (view.location) this.host.pinFile?.(view.location.path);
+      });
+      view.heading.insertBefore(view.pinButton, view.status);
+    }
+
+    if (pinned) {
+      view.pinButton.textContent = "\u{1F4CC} Pinned";
+      view.pinButton.disabled = true;
+      view.pinButton.classList.add("pinned");
+      view.pinButton.title = "Pinned to context";
+    } else {
+      view.pinButton.textContent = "\u{1F4CC} Pin";
+      view.pinButton.disabled = false;
+      view.pinButton.classList.remove("pinned");
+      view.pinButton.title = "Pin to context";
+    }
+  }
+
+  refreshPinStates(): void {
+    for (const view of this.toolViews.values()) {
+      this.syncPinState(view);
     }
   }
 

@@ -44,11 +44,13 @@ import { renderMarkdownHtml } from "./markdown";
 import { ComposerStatusBar } from "./components/composer-status-bar";
 import { PlanBarView } from "./components/plan-bar-view";
 import { ToolCallManager, ToolUpdate } from "./components/tool-call-view";
+import { toProjectRelativePath } from "../paths";
 import { PermissionManager } from "./components/permission-view";
 import {
   TestCommandModal,
   BuildCommandModal,
 } from "./components/test-command-modal";
+import { ProxyModal } from "./components/proxy-modal";
 import { SessionListView } from "./components/session-list-view";
 import { SlashComposer } from "./components/slash-composer";
 import { createProxyFetch } from "../proxy-fetch";
@@ -303,6 +305,15 @@ export class PulsarAssistantView {
       onDeleteToolCall: (toolCallId) =>
         void self.handleDeleteItem("tool_call", toolCallId),
       pinFile: (p) => self.pinFile(p),
+      isPinned: (p) => {
+        try {
+          return self.session
+            .getPinnedFiles()
+            .includes(toProjectRelativePath(self.projectRoot, p));
+        } catch {
+          return false;
+        }
+      },
     });
 
     this.permissionManager = new PermissionManager({
@@ -877,6 +888,7 @@ export class PulsarAssistantView {
     addSettingsItem("Set test command\u2026", () =>
       this.openTestCommandModal(),
     );
+    addSettingsItem("Set proxy\u2026", () => this.openProxyModal());
     addSettingsItem("Edit configuration\u2026", () =>
       atom.commands.dispatch(this.element, "pulsar-assistant:edit-agents"),
     );
@@ -1956,6 +1968,21 @@ export class PulsarAssistantView {
     });
   }
 
+  private openProxyModal(): void {
+    const current =
+      atom.config.get<string>("pulsar-assistant.proxyUrl") ?? null;
+    ProxyModal.show({
+      currentUrl: typeof current === "string" ? current : null,
+      onSave: (url) => {
+        if (url) {
+          atom.config.set("pulsar-assistant.proxyUrl", url);
+        } else {
+          atom.config.unset("pulsar-assistant.proxyUrl");
+        }
+      },
+    });
+  }
+
   private resetSessionsChrome(): void {
     this.sessionListView.setBusy(false);
     this.sessionListView.close();
@@ -2280,6 +2307,7 @@ export class PulsarAssistantView {
         break;
       case "pinned-files-changed":
         this.renderPinnedFiles();
+        this.toolCallManager.refreshPinStates();
         break;
       case "update":
         this.handleUpdate(event.sessionId, event.update);
