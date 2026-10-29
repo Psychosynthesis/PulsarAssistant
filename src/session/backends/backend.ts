@@ -28,10 +28,11 @@ export interface AgentBackend {
   cancel(): void;
 
   newSession(cwd: string): Promise<acp.NewSessionResponse>;
-  loadSession(id: string, cwd: string): Promise<void>;
+  loadSession(id: string, cwd: string): Promise<void | string | null>;
   deleteSession(id: string, cwd: string): Promise<{ deletedActive: boolean }>;
   listSessions(cwd: string): Promise<acp.SessionInfo[]>;
-  activateCachedSession(id: string): void;
+  activateCachedSession(id: string): void | string | null;
+  currentModel?(): string | null;
 
   supportsImages(): boolean;
   supportsEmbeddedContext(): boolean;

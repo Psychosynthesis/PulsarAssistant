@@ -86,9 +86,6 @@ export function getPinnedFilesPath(projectStorageDir: string): string {
   return path.join(projectStorageDir, "pinned.json");
 }
 
-export const PINNED_FILES_LIMIT = 5;
-export const PINNED_FILE_MAX_LINES = 800;
-
 export async function loadPinnedFiles(
   projectStorageDir: string,
 ): Promise<string[]> {

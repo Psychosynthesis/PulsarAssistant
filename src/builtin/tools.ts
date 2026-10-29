@@ -79,7 +79,7 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
     function: {
       name: "write_diff",
       description:
-        "Apply a targeted edit to a file. Pass `path` and either `startLine` (with optional `endLine`) and `replace` (or `content`), or `search` and `replace`.",
+        "Edit an existing file. Use either `startLine` (and optional `endLine`) or `search`, never both. Pass `replace` (or `content`), including an empty string to delete. Line numbers are 1-based and must be within the file.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -903,26 +903,43 @@ async function writeDiffTool(
   const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
   assertWritablePath(ctx.cwd, filePath);
 
-  let oldText: string | null = null;
-  try {
-    const existing = await ctx.host.readTextFile({
-      sessionId: ctx.sessionId,
-      path: filePath,
-    });
-    oldText = existing.content ?? "";
-  } catch {
-    oldText = "";
+  const replacement = stringArg(args, "replace");
+  const content = stringArg(args, "content");
+  if (replacement === undefined && content === undefined) {
+    throw new Error("write_diff requires `replace` or `content` (use an empty string to delete).");
   }
-
-  const replaceText =
-    stringArg(args, "replace") ?? stringArg(args, "content") ?? "";
+  if (replacement !== undefined && content !== undefined && replacement !== content) {
+    throw new Error("write_diff received conflicting `replace` and `content` values.");
+  }
+  const replaceText = replacement ?? content!;
   const startLine = intArg(args, "startLine");
-  const endLine = intArg(args, "endLine") ?? startLine;
+  const endLine = intArg(args, "endLine");
   const search = stringArg(args, "search") ?? stringArg(args, "searchText");
+  const hasStartLine = args.startLine != null;
+  const hasEndLine = args.endLine != null;
+  const hasSearch = args.search != null || args.searchText != null;
+
+  if (hasSearch && (hasStartLine || hasEndLine)) {
+    throw new Error("write_diff cannot combine `search` with `startLine` or `endLine`; choose one mode.");
+  }
+  if (hasStartLine && (startLine === undefined || !Number.isSafeInteger(Number(args.startLine)))) {
+    throw new Error("write_diff `startLine` must be an integer.");
+  }
+  if (hasEndLine && (startLine === undefined || endLine === undefined || !Number.isSafeInteger(Number(args.endLine)))) {
+    throw new Error("write_diff `endLine` requires a valid `startLine` and must be an integer.");
+  }
+  if (startLine !== undefined && args.all === true) {
+    throw new Error("write_diff `all` is only valid with `search`.");
+  }
 
   assertNoSystemicMarker(replaceText, "replace");
   assertNoSystemicMarker(search, "search");
 
+  const existing = await ctx.host.readTextFile({
+    sessionId: ctx.sessionId,
+    path: filePath,
+  });
+  const oldText = existing.content ?? "";
   let newContent: string;
   let summary: string;
 
@@ -930,13 +947,18 @@ async function writeDiffTool(
     if (startLine < 1) {
       throw new Error("write_diff `startLine` must be >= 1.");
     }
-    const safeEndLine =
-      endLine !== undefined ? Math.max(startLine, endLine) : startLine;
+    const safeEndLine = endLine ?? startLine;
+    if (safeEndLine < startLine) {
+      throw new Error("write_diff `endLine` must be >= `startLine`.");
+    }
 
-    const current = oldText ?? "";
+    const current = oldText;
     const usesCrlf = current.includes("\r\n");
     const eol = usesCrlf ? "\r\n" : "\n";
     const lines = current.split(/\r?\n/);
+    if (startLine > lines.length || safeEndLine > lines.length) {
+      throw new Error(`write_diff line range ${startLine}-${safeEndLine} exceeds the file's ${lines.length} line(s).`);
+    }
 
     const before = lines.slice(0, startLine - 1);
     const after = lines.slice(safeEndLine);
@@ -951,7 +973,7 @@ async function writeDiffTool(
       throw new Error("write_diff `search` must not be empty.");
     }
     const replaceAll = args.all === true;
-    const res = robustReplace(oldText ?? "", search, replaceText, replaceAll);
+    const res = robustReplace(oldText, search, replaceText, replaceAll);
     newContent = res.newContent;
     summary = `Replaced ${res.count} occurrence${res.count === 1 ? "" : "s"} in ${filePath}`;
   } else {

@@ -45,6 +45,7 @@ type CursorRemoteStatus =
 type CursorSessionState = {
   sessionId: string;
   cwd: string;
+  model: string;
   remoteCreated: boolean;
   repositoryUrl?: string;
   startingRef?: string;
@@ -200,6 +201,7 @@ export class CursorBackend implements AgentBackend {
     const state: CursorSessionState = {
       sessionId,
       cwd,
+      model: this.target.model,
       remoteCreated: false,
       remoteStatus: "unknown",
       title: "New Session",
@@ -226,6 +228,7 @@ export class CursorBackend implements AgentBackend {
     const state: CursorSessionState = {
       sessionId: stored.id,
       cwd,
+      model: stored.model || this.target.model,
       remoteCreated: provider.remoteCreated === true,
       repositoryUrl:
         typeof provider.repositoryUrl === "string"
@@ -346,12 +349,18 @@ export class CursorBackend implements AgentBackend {
     return this.sessions.has(id);
   }
 
-  activateCachedSession(id: string): void {
+  activateCachedSession(id: string): string | null {
     const state = this.sessions.get(id);
-    if (!state) return;
+    if (!state) return null;
     this.sessionId = id;
     this.sessionCwd = state.cwd;
     this.state = state;
+    this.target = { ...this.target, model: state.model };
+    return state.model;
+  }
+
+  currentModel(): string {
+    return this.state?.model ?? this.target.model;
   }
 
   currentSessionConfigOptions(): acp.SessionConfigOption[] | null {
@@ -371,6 +380,7 @@ export class CursorBackend implements AgentBackend {
       throw new Error("Cursor model is fixed for this session.");
     }
     this.target = { ...this.target, model };
+    if (this.state) this.state.model = model;
   }
 
   async prompt(
@@ -722,7 +732,7 @@ export class CursorBackend implements AgentBackend {
     return { sessionId };
   }
 
-  async loadSession(id: string, cwd: string): Promise<void> {
+  async loadSession(id: string, cwd: string): Promise<string | null> {
     const stored = await loadStoredSession(this.storageDir, id);
     if (!stored) {
       throw new Error(`Session not found: ${id}`);
@@ -731,6 +741,7 @@ export class CursorBackend implements AgentBackend {
       throw new Error("That session belongs to a different backend.");
     }
     await this.adoptStoredSession(stored, cwd);
+    return this.state?.model ?? null;
   }
 
   async deleteSession(
@@ -793,7 +804,7 @@ export class CursorBackend implements AgentBackend {
       id: state.sessionId,
       projectRoot: state.cwd,
       agentId: this.target.id,
-      model: this.target.model,
+      model: state.model,
       title: state.title,
       createdAt: state.createdAt,
       updatedAt: Date.now(),

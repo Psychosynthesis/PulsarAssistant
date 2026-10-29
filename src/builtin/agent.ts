@@ -13,7 +13,6 @@ import {
   deleteStoredSession,
   listStoredSessions,
   loadStoredSession,
-  PINNED_FILE_MAX_LINES,
   saveStoredSession,
   type StoredContextMessage,
   type StoredSessionSummary,
@@ -33,7 +32,9 @@ import { deepseekFetch, deepseekSearch } from "../web-search";
 import { contentBlocksToText } from "../session/prompt-text";
 import {
   API_HOST_CONTEXT_MESSAGE,
+  DEFAULT_TOOL_CALL_DELAY_MS,
   MAX_TOOL_ITERATIONS,
+  PINNED_FILE_MAX_LINES,
   TOOL_OUTPUT_COMPACT_INTERVAL,
 } from "../constants";
 
@@ -427,6 +428,14 @@ export class BuiltinAgent {
     return this.target;
   }
 
+  getSessionModel(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.model ?? null;
+  }
+
+  getSessionCwd(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.cwd ?? null;
+  }
+
   private getFileTreeOverview(): string | null {
     try {
       const tree = this.getFileTree?.();
@@ -437,8 +446,13 @@ export class BuiltinAgent {
     }
   }
 
-  setModel(model: string): void {
+  setModel(model: string, sessionId?: string): void {
     this.target = { ...this.target, model };
+    const session = sessionId ? this.sessions.get(sessionId) : undefined;
+    if (session && session.model !== model) {
+      session.model = model;
+      void this.persistSession(session);
+    }
   }
 
   initialize(params: acp.InitializeRequest): acp.InitializeResponse {
@@ -549,10 +563,6 @@ export class BuiltinAgent {
     }
     if (!session) throw new Error(`Unknown session: ${sessionId}`);
 
-    if (session.model) {
-      this.setModel(session.model);
-    }
-
     // Replay stored conversation messages to the UI view
     for (const msg of session.messages) {
       if (msg.role === "user" && msg.content) {
@@ -609,6 +619,7 @@ export class BuiltinAgent {
         });
       }
     }
+    if (session.model) this.setModel(session.model);
     return {};
   }
 
@@ -1037,7 +1048,7 @@ export class BuiltinAgent {
       });
       for (let index = 0; index < toolCalls.length; index += 1) {
         const call = toolCalls[index];
-        const delayMs = this.getPolicy().toolCallDelayMs ?? 500;
+        const delayMs = this.getPolicy().toolCallDelayMs ?? DEFAULT_TOOL_CALL_DELAY_MS;
         if (!signal.aborted && delayMs > 0) {
           await sleepWithSignal(delayMs, signal);
         }

@@ -157,12 +157,12 @@ By default, the builtin agent has no terminal access. To allow `run_command` or
       "/path/to/my/project":
         allowCommands: true      # enables run_command
         testCommand: "npm test"  # exact test command run by run_tests
-        maxTurnRequests: 200     # optional; maximum tool calls in one turn (default: 200, max: 1000)
+        maxTurnRequests: 200     # optional; maximum tool calls in one turn (default: 300, max: 1000)
 ```
 
 `allowCommands` is a boolean. `testCommand` is the exact command line
 (`run_tests` cannot change it). `maxTurnRequests` is a positive integer
-(up to 1000) overriding the default maximum number of tool calls in one turn (200).
+(up to 1000) overriding the default maximum number of tool calls in one turn (300).
 Keys are absolute project roots. The **Tool turns** input in the panel edits
 `maxTurnRequests` for the current project.
 

@@ -60,6 +60,9 @@ import { createProxyFetch } from "../proxy-fetch";
 import { PinnedFilesView } from "./components/pinned-files-view";
 import { ChatPlaceholderView } from "./components/chat-placeholder";
 import {
+  AgentSettingsView,
+} from "./components/agent-settings-view";
+import {
   PromptAttachmentsView,
   type MaterializedContext,
 } from "./components/prompt-attachments-view";
@@ -81,16 +84,9 @@ import {
   createElement,
   elementFromHtml,
   errorMessage,
-  ref,
 } from "./utils";
 import {
-  API_FORMAT_CONTROL,
-  COMPACT_INTERVAL_CONTROL,
   CONFIG_SELECTORS,
-  REASONING_EFFORT_CONTROL,
-  TOOL_DELAY_CONTROL,
-  TURN_LIMIT_CONTROL,
-  WEB_SEARCH_CONTROL,
 } from "./templates/agent-view";
 
 /**
@@ -176,11 +172,9 @@ export class PulsarAssistantView {
   private contextProgressBar!: ContextProgressBar;
   private sessionListView!: SessionListView;
   private chatPlaceholder!: ChatPlaceholderView;
+  private settingsView!: AgentSettingsView;
   private compactButton!: HTMLButtonElement;
   private newSessionButton!: HTMLButtonElement;
-  private settingsButton!: HTMLButtonElement;
-  private settingsMenu!: HTMLElement;
-  private settingsMenuOpen = false;
   private projectSessions: ProjectSessionEntry[] = [];
   private sessionsRequestId = 0;
   private sessionsLoaded = false;
@@ -194,12 +188,6 @@ export class PulsarAssistantView {
   private stopButton!: HTMLButtonElement;
   private autoApproveButton!: HTMLButtonElement;
   private autoApprovePermissions = false;
-  private maxTurnRequestsInput!: HTMLInputElement;
-  private toolCallDelayInput!: HTMLInputElement;
-  private compactIntervalInput!: HTMLInputElement;
-  private apiFormatSelect!: HTMLSelectElement;
-  private reasoningEffortSelect!: HTMLSelectElement;
-  private webSearchSelect!: HTMLSelectElement;
   private followButton!: HTMLButtonElement;
   private followAgent = false;
   private followTargetPath: string | null = null;
@@ -271,9 +259,7 @@ export class PulsarAssistantView {
   private refreshControls(): void {
     this.renderAgentPicker();
     this.renderModelSelector();
-    this.refreshApiFormatControl();
-    this.refreshReasoningEffortControl();
-    this.refreshWebSearchControl();
+    this.settingsView.refresh();
     this.updateInputControls();
   }
 
@@ -421,12 +407,7 @@ export class PulsarAssistantView {
     this.renderModelSelector();
     this.renderConfigSelectors();
     this.renderLiveRow();
-    this.refreshTurnLimitInput();
-    this.refreshToolDelayInput();
-    this.refreshCompactIntervalInput();
-    this.refreshApiFormatControl();
-    this.refreshReasoningEffortControl();
-    this.refreshWebSearchControl();
+    this.settingsView.refresh();
 
     this.ensureStarted();
   }
@@ -519,11 +500,9 @@ export class PulsarAssistantView {
       this.resetModelState();
     }
     this.renderModelSelector();
-    this.refreshApiFormatControl();
-    this.refreshReasoningEffortControl();
-    this.refreshWebSearchControl();
+    this.settingsView.refresh();
     this.updateContextProgress();
-      this.updateInputControls();
+    this.updateInputControls();
     if (this.infoPanelOpen) this.renderInfoPanel();
     this.renderLiveRow();
     if (this.isShown && !this.session.sessionId && !this.session.running) {
@@ -550,6 +529,16 @@ export class PulsarAssistantView {
       return target.model;
     }
     return null;
+  }
+
+  private syncSessionModel(model: string | null | undefined): void {
+    const target = this.activeTarget;
+    if (target && (target.kind === "openai" || target.kind === "cursor")) {
+      const nextModel = model ?? target.model;
+      this.selectedModelId = nextModel;
+      this.activeTarget = { ...target, model: nextModel };
+    }
+    this.renderModelSelector();
   }
 
   private currentModelDescription(): string | null {
@@ -869,79 +858,28 @@ export class PulsarAssistantView {
       atom.tooltips.add(this.newSessionButton, { title: "New session" }),
     );
     this.newSessionButton.addEventListener("click", () => this.startNewSession());
-
-    const settingsWrap = createElement("div", { class: "pulsar-assistant-settings-wrap", style: { position: "relative" } });
-
-    this.settingsButton = createElement("button", { class: ["pulsar-assistant-settings-toggle", "pulsar-assistant-sessions-toggle", "icon", "icon-gear"] });
-    this.settingsButton.setAttribute("aria-label", "Project settings");
-    this.settingsButton.setAttribute("aria-haspopup", "menu");
-    this.settingsButton.setAttribute("aria-expanded", "false");
-    this.settingsButton.addEventListener("click", () =>
-      this.toggleSettingsMenu(),
-    );
-    this.subscriptions.add(
-      atom.tooltips.add(this.settingsButton, {
-        title: "Project settings",
-        placement: "bottom",
-      }),
-    );
-
-    this.settingsMenu = createElement("div", { class: ["pulsar-assistant-picker-menu", "pulsar-assistant-settings-menu"], style: { display: "none", left: "auto", right: "0" } });
-    this.settingsMenu.setAttribute("role", "menu");
-    this.settingsMenu.setAttribute("aria-label", "Project settings");
-
-    const addSettingsItem = (label: string, onSelect: () => void): void => {
-      const item = createElement("button", { class: "pulsar-assistant-picker-item" });
-      item.setAttribute("role", "menuitem");
-      item.textContent = label;
-      item.addEventListener("click", () => {
-        this.closeSettingsMenu();
-        onSelect();
-      });
-      this.settingsMenu.appendChild(item);
-    };
-    addSettingsItem("Set build command\u2026", () =>
-      this.openBuildCommandModal(),
-    );
-    addSettingsItem("Set test command\u2026", () =>
-      this.openTestCommandModal(),
-    );
-    addSettingsItem("Set proxy\u2026", () => this.openProxyModal());
-    addSettingsItem("Edit configuration\u2026", () =>
-      atom.commands.dispatch(this.element, "pulsar-assistant:edit-agents"),
-    );
-    addSettingsItem("Manage projects & storage\u2026", () =>
-      atom.commands.dispatch(this.element, "pulsar-assistant:manage-projects"),
-    );
-
-    settingsWrap.appendChild(this.settingsButton);
-    settingsWrap.appendChild(this.settingsMenu);
-
-    const onSettingsDocMouseDown = (event: MouseEvent) => {
-      if (this.settingsMenuOpen && !settingsWrap.contains(event.target as Node)) {
-        this.closeSettingsMenu();
-      }
-    };
-    document.addEventListener("mousedown", onSettingsDocMouseDown, true);
-    this.subscriptions.add(
-      new Disposable(() =>
-        document.removeEventListener("mousedown", onSettingsDocMouseDown, true),
-      ),
-    );
-
-    const onSettingsKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && this.settingsMenuOpen) {
-        this.closeSettingsMenu();
-        this.settingsButton.focus();
-      }
-    };
-    document.addEventListener("keydown", onSettingsKeyDown);
-    this.subscriptions.add(
-      new Disposable(() =>
-        document.removeEventListener("keydown", onSettingsKeyDown),
-      ),
-    );
-
+    this.settingsView = new AgentSettingsView({
+      closeOtherMenus: () => {
+        this.closeAgentMenu();
+        this.closeAllConfigMenus();
+      },
+      openBuildCommand: () => this.openBuildCommandModal(),
+      openTestCommand: () => this.openTestCommandModal(),
+      openProxySettings: () => this.openProxyModal(),
+      editConfiguration: () =>
+        atom.commands.dispatch(this.element, "pulsar-assistant:edit-agents"),
+      manageProjectsAndStorage: () =>
+        atom.commands.dispatch(this.element, "pulsar-assistant:manage-projects"),
+      getProjectPolicy: () => readProjectPolicy(this.projectRoot),
+      getTarget: () => this.activeTarget?.kind === "openai" ? this.activeTarget : null,
+      setMaxTurnRequests: (value) => setProjectMaxTurnRequests(this.projectRoot, value),
+      setToolCallDelay: (value) => setProjectToolCallDelay(this.projectRoot, value),
+      setCompactInterval: (value) => setProjectToolOutputCompactInterval(this.projectRoot, value),
+      setApiFormat: (value) => this.applyApiFormat(value),
+      setReasoningEffort: (value) => this.applyReasoningEffort(value),
+      setWebSearch: (value) => this.applyWebSearch(value),
+      reportError: (message) => this.appendError(message),
+    });
     this.infoButton = createElement("button", { class: "pulsar-assistant-info-toggle", style: { display: "none" } });
     this.infoButton.textContent = "More\u2026";
     this.infoButton.setAttribute("aria-label", "Agent details");
@@ -963,7 +901,7 @@ export class PulsarAssistantView {
     rightGroup.appendChild(this.compactButton);
     rightGroup.appendChild(this.sessionListView.getToggleElement());
     rightGroup.appendChild(this.newSessionButton);
-    rightGroup.appendChild(settingsWrap);
+    rightGroup.appendChild(this.settingsView.getElement());
 
     this.runtimeStatusEl.appendChild(this.infoButton);
     this.runtimeStatusEl.appendChild(this.liveStatusEl);
@@ -1067,12 +1005,7 @@ export class PulsarAssistantView {
 
     actions.appendChild(this.attachments.getControlElement());
     actions.appendChild(this.buildConfigSelectors());
-    actions.appendChild(this.buildTurnLimitControl());
-    actions.appendChild(this.buildToolDelayControl());
-    actions.appendChild(this.buildCompactIntervalControl());
-    actions.appendChild(this.buildApiFormatControl());
-    actions.appendChild(this.buildReasoningEffortControl());
-    actions.appendChild(this.buildWebSearchControl());
+    for (const control of this.settingsView.getControls()) actions.appendChild(control);
     actions.appendChild(this.autoApproveButton);
 
     const actionButtons = createElement("div", { class: "pulsar-assistant-action-buttons" });
@@ -1188,204 +1121,11 @@ export class PulsarAssistantView {
     return container;
   }
 
-  private buildTurnLimitControl(): HTMLElement {
-    const wrap = elementFromHtml(TURN_LIMIT_CONTROL);
-    this.maxTurnRequestsInput = ref<HTMLInputElement>(wrap, "input");
-    this.maxTurnRequestsInput.addEventListener("change", () => {
-      this.saveTurnLimit();
-    });
-
-    this.subscriptions.add(
-      atom.tooltips.add(wrap, {
-        title:
-          "Maximum tool calls in one turn for this project. Empty uses the default (200).",
-        placement: "top",
-        trigger: "hover",
-      }),
-    );
-
-    return wrap;
-  }
-
-  private refreshTurnLimitInput(): void {
-    if (!this.maxTurnRequestsInput) return;
-    const policy = readProjectPolicy(this.projectRoot);
-    this.maxTurnRequestsInput.value =
-      policy.maxTurnRequests == null ? "" : String(policy.maxTurnRequests);
-  }
-
-  private saveTurnLimit(): void {
-    const raw = this.maxTurnRequestsInput.value.trim();
-    if (!raw) {
-      setProjectMaxTurnRequests(this.projectRoot, null);
-      this.refreshTurnLimitInput();
-      return;
-    }
-    const value = Number(raw);
-    if (!Number.isInteger(value) || value < 1 || value > 1000) {
-      this.refreshTurnLimitInput();
-      this.appendError("Tool turns must be a whole number from 1 to 1000.");
-      return;
-    }
-    setProjectMaxTurnRequests(this.projectRoot, value);
-    this.refreshTurnLimitInput();
-  }
-
-  private buildToolDelayControl(): HTMLElement {
-    const wrap = elementFromHtml(TOOL_DELAY_CONTROL);
-    this.toolCallDelayInput = ref<HTMLInputElement>(wrap, "input");
-    this.toolCallDelayInput.addEventListener("change", () => {
-      this.saveToolDelay();
-    });
-
-    this.subscriptions.add(
-      atom.tooltips.add(wrap, {
-        title:
-          "Mandatory delay (in milliseconds) between tool calls for this project to prevent rate limit (TPM/429) errors. Minimum 100ms. Empty uses 500ms.",
-        placement: "top",
-        trigger: "hover",
-      }),
-    );
-
-    return wrap;
-  }
-
-  private refreshToolDelayInput(): void {
-    if (!this.toolCallDelayInput) return;
-    const policy = readProjectPolicy(this.projectRoot);
-    this.toolCallDelayInput.value =
-      policy.toolCallDelayMs == null ? "" : String(policy.toolCallDelayMs);
-  }
-
-  private saveToolDelay(): void {
-    const raw = this.toolCallDelayInput.value.trim();
-    if (!raw) {
-      setProjectToolCallDelay(this.projectRoot, null);
-      this.refreshToolDelayInput();
-      return;
-    }
-    const value = Number(raw);
-    if (!Number.isInteger(value) || value < 100) {
-      this.refreshToolDelayInput();
-      this.appendError("Tool call delay must be an integer >= 100 ms.");
-      return;
-    }
-    setProjectToolCallDelay(this.projectRoot, value);
-    this.refreshToolDelayInput();
-  }
-
-  private buildCompactIntervalControl(): HTMLElement {
-    const wrap = elementFromHtml(COMPACT_INTERVAL_CONTROL);
-    this.compactIntervalInput = ref<HTMLInputElement>(wrap, "input");
-    this.compactIntervalInput.addEventListener("change", () => {
-      this.saveCompactInterval();
-    });
-
-    this.subscriptions.add(
-      atom.tooltips.add(wrap, {
-        title:
-          "Compact older tool outputs in context every N tool calls to conserve tokens. 0 disables automatic compaction. Empty uses the default (30).",
-        placement: "top",
-        trigger: "hover",
-      }),
-    );
-
-    return wrap;
-  }
-
-  private refreshCompactIntervalInput(): void {
-    if (!this.compactIntervalInput) return;
-    const policy = readProjectPolicy(this.projectRoot);
-    this.compactIntervalInput.value =
-      policy.toolOutputCompactInterval == null
-        ? ""
-        : String(policy.toolOutputCompactInterval);
-  }
-
-  private saveCompactInterval(): void {
-    const raw = this.compactIntervalInput.value.trim();
-    if (!raw) {
-      setProjectToolOutputCompactInterval(this.projectRoot, null);
-      this.refreshCompactIntervalInput();
-      return;
-    }
-    const value = Number(raw);
-    if (!Number.isInteger(value) || value < 0) {
-      this.refreshCompactIntervalInput();
-      this.appendError("Compact interval must be an integer >= 0.");
-      return;
-    }
-    setProjectToolOutputCompactInterval(this.projectRoot, value);
-    this.refreshCompactIntervalInput();
-  }
-
-  private buildApiFormatControl(): HTMLElement {
-    const wrap = elementFromHtml(API_FORMAT_CONTROL);
-    this.apiFormatSelect = ref<HTMLSelectElement>(wrap, "select");
-    this.apiFormatSelect.addEventListener("change", () => {
-      this.applyApiFormat(
-        this.apiFormatSelect.value as "chat-completions" | "responses",
-      );
-    });
-    this.subscriptions.add(
-      atom.tooltips.add(wrap, {
-        title:
-          "API transport for this OpenAI agent. Use Responses for OpenAI reasoning models (o-series / gpt-5+) together with function tools. Changing it restarts the agent.",
-        placement: "top",
-        trigger: "hover",
-      }),
-    );
-    return wrap;
-  }
-
-  private buildReasoningEffortControl(): HTMLElement {
-    const wrap = elementFromHtml(REASONING_EFFORT_CONTROL);
-    this.reasoningEffortSelect = ref<HTMLSelectElement>(wrap, "select");
-    this.reasoningEffortSelect.addEventListener("change", () => {
-      this.applyReasoningEffort(this.reasoningEffortSelect.value);
-    });
-    this.subscriptions.add(
-      atom.tooltips.add(wrap, {
-        title:
-          "Reasoning effort for reasoning models. Auto uses the provider default (or 'none' for Chat Completions with function tools). Changing it restarts the agent.",
-        placement: "top",
-        trigger: "hover",
-      }),
-    );
-    return wrap;
-  }
-
-  private refreshApiFormatControl(): void {
-    if (!this.apiFormatSelect) return;
-    const target = this.activeTarget;
-    const wrap = this.apiFormatSelect.closest(".pulsar-assistant-api-format");
-    if (wrap instanceof HTMLElement) {
-      wrap.style.display = target?.kind === "openai" ? "" : "none";
-    }
-    if (target?.kind === "openai") {
-      this.apiFormatSelect.value = target.apiFormat;
-    }
-  }
-
-  private refreshReasoningEffortControl(): void {
-    if (!this.reasoningEffortSelect) return;
-    const target = this.activeTarget;
-    const wrap = this.reasoningEffortSelect.closest(
-      ".pulsar-assistant-reasoning-effort",
-    );
-    if (wrap instanceof HTMLElement) {
-      wrap.style.display = target?.kind === "openai" ? "" : "none";
-    }
-    if (target?.kind === "openai") {
-      this.reasoningEffortSelect.value = target.reasoningEffort ?? "";
-    }
-  }
-
   private applyApiFormat(value: "chat-completions" | "responses"): void {
     const target = this.activeTarget;
     if (!target || target.kind !== "openai") return;
     if (target.apiFormat === value) {
-      this.refreshApiFormatControl();
+      this.settingsView.refresh();
       return;
     }
     setAgentApiFormat(target.id, value);
@@ -1396,49 +1136,18 @@ export class PulsarAssistantView {
     const target = this.activeTarget;
     if (!target || target.kind !== "openai") return;
     if ((target.reasoningEffort ?? "") === value) {
-      this.refreshReasoningEffortControl();
+      this.settingsView.refresh();
       return;
     }
     setAgentReasoningEffort(target.id, value === "" ? null : value);
     this.relaunchActiveAgent();
   }
 
-  private buildWebSearchControl(): HTMLElement {
-    const wrap = elementFromHtml(WEB_SEARCH_CONTROL);
-    this.webSearchSelect = ref<HTMLSelectElement>(wrap, "select");
-    this.webSearchSelect.addEventListener("change", () => {
-      this.applyWebSearch(
-        this.webSearchSelect.value as "off" | "auto" | "native" | "local",
-      );
-    });
-    this.subscriptions.add(
-      atom.tooltips.add(wrap, {
-        title:
-          "Web search for this OpenAI agent. Native uses the provider's server-side search (OpenAI Responses); Local uses the DeepSeek Search & Fetch API. Changing it restarts the agent.",
-        placement: "top",
-        trigger: "hover",
-      }),
-    );
-    return wrap;
-  }
-
-  private refreshWebSearchControl(): void {
-    if (!this.webSearchSelect) return;
-    const target = this.activeTarget;
-    const wrap = this.webSearchSelect.closest(".pulsar-assistant-web-search");
-    if (wrap instanceof HTMLElement) {
-      wrap.style.display = target?.kind === "openai" ? "" : "none";
-    }
-    if (target?.kind === "openai") {
-      this.webSearchSelect.value = target.webSearch;
-    }
-  }
-
   private applyWebSearch(value: "off" | "auto" | "native" | "local"): void {
     const target = this.activeTarget;
     if (!target || target.kind !== "openai") return;
     if (target.webSearch === value) {
-      this.refreshWebSearchControl();
+      this.settingsView.refresh();
       return;
     }
     setAgentWebSearch(target.id, value);
@@ -1625,7 +1334,11 @@ export class PulsarAssistantView {
       this.followTimer = null;
       const pending = this.followPending;
       this.followPending = null;
-      if (pending) void this.followLocation(pending.path, pending.line);
+      if (pending) {
+        void this.followLocation(pending.path, pending.line).catch((error) => {
+          console.error("[pulsar-assistant] follow failed", error);
+        });
+      }
     }, 150);
   }
 
@@ -1650,8 +1363,14 @@ export class PulsarAssistantView {
       editor = await atom.workspace.open(filePath, {
         searchAllPanes: true,
         activatePane: false,
+        pending: true,
       });
-    } catch {
+    } catch (error) {
+      if (generation === this.followGeneration) {
+        this.followTargetPath = null;
+        this.followTargetLine = null;
+      }
+      console.error("[pulsar-assistant] follow open failed", error);
       return;
     }
     if (
@@ -1662,9 +1381,25 @@ export class PulsarAssistantView {
     ) {
       return;
     }
-    const row = line ?? 0;
-    editor.scrollToBufferPosition([row, 0], { center: true });
-    this.flashFollowLine(editor, row);
+    if (editor.isDestroyed()) {
+      this.followTargetPath = null;
+      this.followTargetLine = null;
+      return;
+    }
+    const row = Math.min(
+      Math.max(0, Number.isSafeInteger(line) ? line! : 0),
+      Math.max(0, editor.getLineCount() - 1),
+    );
+    try {
+      editor.scrollToBufferPosition([row, 0], { center: true });
+      this.flashFollowLine(editor, row);
+    } catch (error) {
+      if (generation === this.followGeneration) {
+        this.followTargetPath = null;
+        this.followTargetLine = null;
+      }
+      throw error;
+    }
   }
 
   private flashFollowLine(editor: TextEditor, row: number): void {
@@ -2122,23 +1857,8 @@ export class PulsarAssistantView {
     this.agentPicker.setAttribute("aria-expanded", "false");
   }
 
-  private toggleSettingsMenu(): void {
-    if (this.settingsMenuOpen) this.closeSettingsMenu();
-    else this.openSettingsMenu();
-  }
-
-  private openSettingsMenu(): void {
-    this.closeAgentMenu();
-    this.closeAllConfigMenus();
-    this.settingsMenu.style.display = "";
-    this.settingsMenuOpen = true;
-    this.settingsButton.setAttribute("aria-expanded", "true");
-  }
-
   private closeSettingsMenu(): void {
-    this.settingsMenu.style.display = "none";
-    this.settingsMenuOpen = false;
-    this.settingsButton.setAttribute("aria-expanded", "false");
+    this.settingsView.close();
   }
 
   private openBuildCommandModal(): void {
@@ -2321,10 +2041,6 @@ export class PulsarAssistantView {
       if (cached !== undefined) this.swapInConversation(cached);
       this.planBarView.syncSession(id);
       this.session.activateCachedSession(id);
-      if (this.session.currentModel && this.activeTarget && "model" in this.activeTarget) {
-        this.activeTarget = { ...this.activeTarget, model: this.session.currentModel };
-      }
-      this.renderModelSelector();
       this.restoreLiveState(id);
       this.permissionManager.setAutoApprove(false);
       this.autoApprovePermissions = false;
@@ -2351,10 +2067,6 @@ export class PulsarAssistantView {
       .then(() => {
         this.hideLoadingOverlay();
         this.restoreLiveState(id);
-        if (this.session.currentModel && this.activeTarget && "model" in this.activeTarget) {
-          this.activeTarget = { ...this.activeTarget, model: this.session.currentModel };
-        }
-        this.renderModelSelector();
         this.planBarView.syncSession(id);
         this.input.focus();
         this.updateContextProgress();
@@ -2464,9 +2176,7 @@ export class PulsarAssistantView {
         this.setAgentStatus(this.modelWarning ? "warning" : "ready");
         this.agentExited = false;
         this.setLifecycleStatus("");
-        if (this.session.currentModel && this.activeTarget && "model" in this.activeTarget) {
-          this.activeTarget = { ...this.activeTarget, model: this.session.currentModel };
-        }
+        this.syncSessionModel(event.modelId);
         this.renderSessionControls();
         this.renderConfigSelectors();
         this.renderModelSelector();
@@ -3185,6 +2895,7 @@ export class PulsarAssistantView {
     this.subscriptions.dispose();
     this.conversationTooltips.dispose();
     this.sessionListView.dispose();
+    this.settingsView.dispose();
     this.chatPlaceholder.dispose();
     this.attachments.dispose();
     this.session.dispose();

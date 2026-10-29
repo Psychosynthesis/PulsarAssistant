@@ -159,7 +159,7 @@ export class ToolCallManager {
 
     const deleteButton = createElement("button", {
       class: ["icon", "icon-trashcan", "pulsar-assistant-item-delete"],
-    }) as HTMLButtonElement;
+    });
     deleteButton.type = "button";
     deleteButton.title = "Delete from context";
     deleteButton.addEventListener("click", (event) => {
@@ -242,6 +242,19 @@ export class ToolCallManager {
     if (update.locations && update.locations.length > 0) {
       const loc = update.locations[0];
       view.location = loc;
+      if (this.host.followAgent && loc.path) {
+        const validLine =
+          typeof loc.line === "number" &&
+          Number.isSafeInteger(loc.line) &&
+          loc.line >= 0
+            ? loc.line
+            : null;
+        try {
+          this.host.scheduleFollow?.(loc.path, validLine);
+        } catch (error) {
+          console.error("[pulsar-assistant] follow scheduling failed", error);
+        }
+      }
       if (!view.heading.querySelector(".pulsar-assistant-location")) {
         const link = createElement("button", { class: ["btn-link", "pulsar-assistant-location"] });
         const lineSuffix = loc.line != null ? `:${loc.line}` : "";

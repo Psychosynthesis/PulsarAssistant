@@ -86,7 +86,7 @@ export class BuiltinBackend implements AgentBackend {
   setModel(model: string): void {
     this.target = { ...this.target, model };
     if (this.builtin) {
-      this.builtin.setModel(model);
+      this.builtin.setModel(model, this.sessionId ?? undefined);
     }
   }
 
@@ -118,11 +118,20 @@ export class BuiltinBackend implements AgentBackend {
     return this.loadedSessionIds.has(id);
   }
 
-  activateCachedSession(id: string): void {
+  activateCachedSession(id: string): string | null {
     this.sessionId = id;
-    if (this.builtin?.activeTarget?.model) {
-      this.target = { ...this.target, model: this.builtin.activeTarget.model };
+    const model = this.builtin?.getSessionModel(id) ?? null;
+    if (model) {
+      this.target = { ...this.target, model };
+      this.builtin?.setModel(model);
     }
+    this.sessionCwd = this.builtin?.getSessionCwd(id) ?? this.sessionCwd;
+    return model;
+  }
+
+  currentModel(): string | null {
+    if (!this.builtin || !this.sessionId) return this.target.model;
+    return this.builtin.getSessionModel(this.sessionId) ?? this.target.model;
   }
 
   currentSessionConfigOptions(): acp.SessionConfigOption[] | null {
@@ -171,17 +180,24 @@ export class BuiltinBackend implements AgentBackend {
     return session;
   }
 
-  async loadSession(id: string, cwd: string): Promise<void> {
+  async loadSession(id: string, cwd: string): Promise<string | null> {
     if (!this.builtin) {
       throw new Error("Agent is not connected.");
     }
-    this.sessionId = id;
+
+    // Leave the current selection untouched until the requested session has
+    // loaded successfully. This lets the UI keep its previous conversation on
+    // failure without leaving the backend pointed at a different session.
     await this.builtin.loadSession(id);
-    if (this.builtin.activeTarget?.model) {
-      this.target = { ...this.target, model: this.builtin.activeTarget.model };
+    const model = this.builtin.getSessionModel(id);
+    this.sessionId = id;
+    this.sessionCwd = this.builtin.getSessionCwd(id) ?? cwd;
+    if (model) {
+      this.target = { ...this.target, model };
+      this.builtin.setModel(model);
     }
-    this.sessionCwd = cwd;
     this.loadedSessionIds.add(id);
+    return model;
   }
 
   async deleteSession(
@@ -242,7 +258,7 @@ export class BuiltinBackend implements AgentBackend {
       sessionUpdate: async (params) => {
         this.emit({
           type: "update",
-          sessionId: (this.sessionId ?? "") as acp.SessionId,
+          sessionId: params.sessionId,
           update: params.update,
         });
       },

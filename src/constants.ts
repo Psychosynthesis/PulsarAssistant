@@ -6,7 +6,10 @@ export const PROTOCOL_VERSION = acp.PROTOCOL_VERSION;
 export const STARTUP_TIMEOUT_MS = 30_000;
 export const AUTH_REQUIRED_CODE = -32000;
 
-export const MAX_TOOL_ITERATIONS = 200; // This is default
+export const MAX_TOOL_ITERATIONS = 300; // This is default
+export const DEFAULT_TOOL_CALL_DELAY_MS = 500;
+export const PINNED_FILES_LIMIT = 5;
+export const PINNED_FILE_MAX_LINES = 800;
 
 /**
  * Context output compaction interval (in number of tool calls).
@@ -16,7 +19,7 @@ export const MAX_TOOL_ITERATIONS = 200; // This is default
  * compacted; assistant tool-call arguments are never rewritten.
  * Set to 0 to disable automatic compaction.
  */
-export const TOOL_OUTPUT_COMPACT_INTERVAL = 50;
+export const TOOL_OUTPUT_COMPACT_INTERVAL = 80;
 
 export const HOST_CONTEXT_START = "<pulsar-assistant-host-context>";
 export const HOST_CONTEXT_END = "</pulsar-assistant-host-context>";

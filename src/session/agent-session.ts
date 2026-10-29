@@ -4,11 +4,11 @@ import {
   buildContextBlock,
   ContextAttachment,
 } from "../util";
+import { PINNED_FILES_LIMIT } from "../constants";
 import type { LaunchTarget } from "../agent-config";
 import {
   deleteStoredSession,
   loadPinnedFiles,
-  PINNED_FILES_LIMIT,
   savePinnedFiles,
 } from "../session-storage";
 import type { StoredContextMessage } from "../session-storage";
@@ -156,10 +156,12 @@ export class AgentSession {
   }
 
   get currentModel(): string | null {
-    if (this.launchTarget && "model" in this.launchTarget) {
-      return (this.launchTarget as any).model ?? null;
-    }
-    return null;
+    const backendModel = this.backend?.currentModel?.();
+    if (backendModel) return backendModel;
+    const target = this.launchTarget;
+    return target && (target.kind === "openai" || target.kind === "cursor")
+      ? target.model
+      : null;
   }
 
   canSetModel(): boolean {
@@ -172,6 +174,12 @@ export class AgentSession {
 
   setModel(model: string): void {
     if (this.backend && !this.backend.canSetModel()) return;
+    this.rememberSessionModel(model);
+    this.backend?.setModel(model);
+  }
+
+  private rememberSessionModel(model: string | null): void {
+    if (!model) return;
     if (
       this.launchTarget &&
       (this.launchTarget.kind === "openai" || this.launchTarget.kind === "cursor")
@@ -183,9 +191,6 @@ export class AgentSession {
       (this.startedTarget.kind === "openai" || this.startedTarget.kind === "cursor")
     ) {
       this.startedTarget = { ...this.startedTarget, model };
-    }
-    if (this.backend) {
-      this.backend.setModel(model);
     }
   }
 
@@ -255,15 +260,14 @@ export class AgentSession {
     if (!this.backend) throw new Error("Backend failed to initialize.");
     await this.fileTreeManager.ensureInitialized();
     await this.backend.start(cwd);
-    const backendTarget = (this.backend as any).target;
-    if (backendTarget?.model) {
-      this.setModel(backendTarget.model);
-    }
+    const modelId = this.backend.currentModel?.() ?? this.currentModel;
+    this.rememberSessionModel(modelId);
     this.starting = null;
 
     this.emit({
       type: "ready",
       source: "start",
+      modelId,
     });
     this.refreshSessionList();
   }
@@ -341,7 +345,8 @@ export class AgentSession {
   }
 
   cancel(): void {
-    this.running = false;
+    // `running` remains true until prompt() settles. Clearing it here allowed
+    // a second prompt to race the still-cancelling backend request.
     this.backend?.cancel();
   }
 
@@ -492,26 +497,30 @@ export class AgentSession {
         this.backend.sessionCwd ?? this.projectRoot,
       );
       await this.backend.newSession(cwd);
+      const modelId = this.backend.currentModel?.() ?? this.currentModel;
+      this.rememberSessionModel(modelId);
       this.switching = false;
-      this.emit({ type: "ready", source: "new" });
+      this.emit({ type: "ready", source: "new", modelId });
       this.refreshSessionList();
     } finally {
       this.switching = false;
     }
   }
 
-  activateCachedSession(id: string): void {
-    if (!this.backend) return;
-    this.backend.activateCachedSession(id);
-    const backendTarget = (this.backend as any).target;
-    if (backendTarget?.model) {
-      this.setModel(backendTarget.model);
-    }
-    this.emit({ type: "ready", source: "load" });
+  activateCachedSession(id: string): string | null {
+    if (!this.backend) return null;
+    const activationResult = this.backend.activateCachedSession(id);
+    const modelId =
+      typeof activationResult === "string"
+        ? activationResult
+        : this.backend.currentModel?.() ?? this.currentModel;
+    this.rememberSessionModel(modelId);
+    this.emit({ type: "ready", source: "load", modelId });
     this.refreshSessionList();
+    return modelId;
   }
 
-  async loadSession(id: string, cwd?: string): Promise<void> {
+  async loadSession(id: string, cwd?: string): Promise<string | null> {
     if (this.running || this.switching) {
       throw new Error("The agent is already responding.");
     }
@@ -527,14 +536,16 @@ export class AgentSession {
       const scopedCwd =
         cwd ?? (await this.editor.resolveSessionCwd(this.projectRoot));
       await this.assertSessionCwdAllowed(scopedCwd, "load");
-      await this.backend.loadSession(id, scopedCwd);
-      const backendTarget = (this.backend as any).target;
-      if (backendTarget?.model) {
-        this.setModel(backendTarget.model);
-      }
+      const loadResult = await this.backend.loadSession(id, scopedCwd);
+      const modelId =
+        typeof loadResult === "string"
+          ? loadResult
+          : this.backend.currentModel?.() ?? this.currentModel;
+      this.rememberSessionModel(modelId);
       this.switching = false;
-      this.emit({ type: "ready", source: "load" });
+      this.emit({ type: "ready", source: "load", modelId });
       this.refreshSessionList();
+      return modelId;
     } finally {
       this.switching = false;
     }

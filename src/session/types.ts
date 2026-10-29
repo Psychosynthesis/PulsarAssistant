@@ -11,7 +11,11 @@ export type AgentEvent =
       capabilities: acp.AgentCapabilities | null;
       supportsImages: boolean;
     }
-  | { type: "ready"; source: "start" | "new" | "load" }
+  | {
+      type: "ready";
+      source: "start" | "new" | "load";
+      modelId?: string | null;
+    }
   | { type: "session-list"; sessions: acp.SessionInfo[] }
   | { type: "turn-start" }
   | { type: "turn-end"; stopReason?: acp.StopReason }
