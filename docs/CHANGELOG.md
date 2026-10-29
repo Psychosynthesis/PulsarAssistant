@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-10-20
+
+- **Node 14 build target**: the esbuild output is now generated for
+  `node14`, matching Pulsar's Electron-renderer runtime (Node.js 14.16), instead
+  of the build machine's Node version. This also downlevels ES2021 syntax such
+  as `??=` so the bundle parses on Pulsar's Node. `.nvmrc` still pins only the
+  build/test toolchain.
+- **Responses API transport**: OpenAI agents can now set
+  `apiFormat: "responses"` to use the Responses API instead of Chat
+  Completions. This is the supported way to run OpenAI reasoning models
+  (o-series / gpt-5) together with function tools, and enables server-side
+  `web_search`. History and tool calls are encoded per transport.
+- **OpenAI reasoning fixes**: `include_reasoning` is no longer sent to the
+  official OpenAI API (it is a Gemini/DeepSeek-style flag and was rejected as
+  an unknown parameter). On Chat Completions, OpenAI reasoning models with
+  tools now send `reasoning_effort: "none"` as a stop-gap so function calling
+  works; switch to `apiFormat: "responses"` for full reasoning.
+- **Reasoning split**: agents gained an optional `reasoningEffort` setting
+  (`none`/`low`/`medium`/`high`), and the former "Request model reasoning"
+  toggle is now "Show thoughts" — it controls whether reasoning summaries are
+  shown and, for Responses, requested via `reasoning.summary`.
+- **`stream` is now applied**: the per-agent `stream` setting was previously
+  read but never passed to the client; it is now honoured, with SSE parsing for
+  both Chat Completions and Responses.
+- **Web search**: new `web_search` and `web_fetch` tools. `webSearch`
+  (`off`/`auto`/`native`/`local`) selects the provider's native search when
+  available (OpenAI Responses) or a local backend (DeepSeek Search & Fetch API).
+  Results are capped and `web_fetch` refuses loopback/private addresses.
+- **Proxy rewrite**: the CONNECT exchange now uses Node's native
+  `http(s).request({ method: "CONNECT" })` instead of a hand-written parser.
+  The CONNECT request-target now always includes the destination port
+  (`host:443`, RFC 9112 §3.2.3). Added connect/TLS/CONNECT timeouts, explicit
+  407 diagnostics, handling of premature `close`/`aborted` (no hanging
+  promises), response-stream backpressure, log-safe proxy URL redaction, strict
+  validation of a malformed proxy URL (rejects instead of silently bypassing
+  the proxy), and a clear hint when an `https://` proxy actually expects a
+  plain HTTP CONNECT connection (`http://`).
+
 ## [0.8.2] - 2026-09-21
 
 - **Streaming hang fix**: the OpenAI-compatible stream now treats

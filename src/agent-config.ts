@@ -19,6 +19,9 @@ export type OpenAiAgentConfig = BaseAgentConfig & {
   model?: string;
   modelsUrl?: string;
   stream?: boolean;
+  apiFormat?: "chat-completions" | "responses";
+  reasoningEffort?: "none" | "low" | "medium" | "high";
+  webSearch?: "off" | "auto" | "native" | "local";
 };
 
 export type AcpAgentConfig = BaseAgentConfig & {
@@ -60,6 +63,9 @@ export type OpenaiLaunchTarget = {
   model: string;
   modelsUrl: string;
   stream: boolean;
+  apiFormat: "chat-completions" | "responses";
+  reasoningEffort?: "none" | "low" | "medium" | "high";
+  webSearch: "off" | "auto" | "native" | "local";
 };
 
 export type CursorLaunchTarget = {
@@ -105,6 +111,14 @@ function optionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed === "" ? undefined : trimmed;
+}
+
+function normalizeWebSearchMode(
+  value: unknown,
+): "off" | "auto" | "native" | "local" {
+  return value === "off" || value === "native" || value === "local"
+    ? value
+    : "auto";
 }
 
 function hasOpenAiModel(entry: Record<string, unknown>): boolean {
@@ -187,6 +201,19 @@ function normalizeAgent(
   const modelsUrl = optionalString(entry.modelsUrl);
   if (modelsUrl) agent.modelsUrl = modelsUrl;
   else delete agent.modelsUrl;
+  agent.apiFormat =
+    entry.apiFormat === "responses" ? "responses" : "chat-completions";
+  if (
+    entry.reasoningEffort === "none" ||
+    entry.reasoningEffort === "low" ||
+    entry.reasoningEffort === "medium" ||
+    entry.reasoningEffort === "high"
+  ) {
+    agent.reasoningEffort = entry.reasoningEffort;
+  } else {
+    delete agent.reasoningEffort;
+  }
+  agent.webSearch = normalizeWebSearchMode(entry.webSearch);
   return agent;
 }
 
@@ -314,6 +341,12 @@ export function toLaunchTarget(
       model: effectiveModel,
       modelsUrl,
       stream: openaiAgent.stream === true,
+      apiFormat:
+        openaiAgent.apiFormat === "responses" ? "responses" : "chat-completions",
+      ...(openaiAgent.reasoningEffort
+        ? { reasoningEffort: openaiAgent.reasoningEffort }
+        : {}),
+      webSearch: normalizeWebSearchMode(openaiAgent.webSearch),
     };
   }
 
@@ -359,7 +392,10 @@ export function launchTargetsEqual(
       a.model === b.model &&
       a.apiKey === b.apiKey &&
       a.modelsUrl === b.modelsUrl &&
-      a.stream === b.stream
+      a.stream === b.stream &&
+      a.apiFormat === b.apiFormat &&
+      a.reasoningEffort === b.reasoningEffort &&
+      a.webSearch === b.webSearch
     );
   }
   if (a.kind === "cursor" && b.kind === "cursor") {

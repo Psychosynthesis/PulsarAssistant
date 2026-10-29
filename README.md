@@ -125,6 +125,15 @@ Required fields:
 Optional fields:
 
 - `modelsUrl`: override endpoint for fetching models (defaults to `{baseUrl}/models`)
+- `apiFormat`: `"chat-completions"` (default) or `"responses"`. Use `"responses"`
+  for OpenAI reasoning models (o-series / gpt-5) together with function tools;
+  it also enables OpenAI's server-side `web_search`.
+- `reasoningEffort`: `"none" | "low" | "medium" | "high"` for reasoning models.
+- `webSearch`: `"off" | "auto" | "native" | "local"`. `auto` prefers the
+  provider's native search (OpenAI Responses) and otherwise a local backend
+  (DeepSeek Search & Fetch API). `local` exposes the `web_search`/`web_fetch`
+  tools, executed client-side.
+- `stream`: `true` to stream responses (parsed as SSE for both API formats).
 
 ### Project commands and tests
 
@@ -162,6 +171,13 @@ To route all API requests through a proxy, set the global package setting
 URL. Leave the value empty for a direct connection. HTTPS destinations are
 tunnelled with `CONNECT`; plain-HTTP destinations are sent in absolute-form to
 the proxy.
+
+Use `https://` only when the proxy itself speaks TLS on its port. Most browser
+proxies are plain HTTP proxies that merely tunnel HTTPS destinations via
+`CONNECT`; for those, use `http://` in the URL. If an `https://` proxy closes
+the connection during the TLS handshake, the error now suggests switching to
+`http://`. Connections, TLS handshakes and `CONNECT` responses are bounded by
+timeouts, and proxy credentials are redacted from diagnostics.
 
 Spawned ACP CLIs still run as their own process and can execute commands without
 going through this package. Use the builtin API agent if you want these

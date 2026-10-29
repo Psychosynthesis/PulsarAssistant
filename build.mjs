@@ -5,12 +5,11 @@ const pkg = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8"),
 );
 
-// Single source of truth for the toolchain Node version (also used by CI via
-// `node-version-file`). Pinned to Pulsar's runtime: Electron 30.5.1 / Node 20.16.0.
-const nodeTarget = readFileSync(
-  new URL("./.nvmrc", import.meta.url),
-  "utf8",
-).trim();
+// `.nvmrc` pins the Node version used to run esbuild and the tests (a modern
+// toolchain; also used by CI via `node-version-file`). Pulsar executes the
+// bundled code in the Electron renderer on Node.js 14.16, so the emitted
+// JavaScript must stay Node 14-compatible no matter which Node runs the build.
+const runtimeTarget = "node14";
 
 // main.ts is Pulsar's entry point. Pure helpers are bundled on their own so
 // tests can import lib/*.js without loading `atom`.
@@ -33,12 +32,13 @@ const options = {
     "src/token-estimate.ts",
     "src/editor/editor-backend.ts",
     "src/builtin/tools.ts",
+    "src/web-search.ts",
   ],
   outdir: "lib",
   bundle: true,
   platform: "node",
   format: "cjs",
-  target: `node${nodeTarget}`,
+  target: runtimeTarget,
   sourcemap: true,
   external: ["atom", "electron"],
   define: {

@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as http from "node:http";
 import {
+  createProxyFetch,
   parseProxyUrl,
   proxyAuthorizationHeader,
+  redactProxyUrl,
 } from "../lib/proxy-fetch.js";
 
 test("parseProxyUrl: http with explicit port", () => {
@@ -59,4 +62,47 @@ test("proxyAuthorizationHeader: emits Basic credentials only when present", () =
   const anonymous = parseProxyUrl("http://host:8080");
   assert.ok(anonymous);
   assert.equal(proxyAuthorizationHeader(anonymous), undefined);
+});
+
+test("redactProxyUrl: strips credentials and keeps host/port", () => {
+  assert.equal(
+    redactProxyUrl("http://alice:secret@host:8080"),
+    "http://***:***@host:8080",
+  );
+  assert.equal(redactProxyUrl("https://host:8443"), "https://host:8443");
+  assert.equal(redactProxyUrl(""), "");
+  assert.equal(redactProxyUrl(null), "");
+});
+
+test("parseProxyUrl: rejects path, query, hash and empty username", () => {
+  assert.equal(parseProxyUrl("http://host:8080/path"), null);
+  assert.equal(parseProxyUrl("http://host:8080?x=1"), null);
+  assert.equal(parseProxyUrl("http://host:8080#frag"), null);
+  assert.equal(parseProxyUrl("http://:pass@host:8080"), null);
+});
+
+test("createProxyFetch: invalid non-empty config throws instead of bypassing the proxy", async () => {
+  const fetchWithProxy = createProxyFetch(() => "not a valid proxy");
+  await assert.rejects(
+    fetchWithProxy("https://example.com/resource"),
+    /Invalid proxy configuration/,
+  );
+});
+
+test("proxyFetch: CONNECT request-target includes the destination port", async () => {
+  let connectTarget = null;
+  const proxy = http.createServer();
+  proxy.on("connect", (req, socket) => {
+    connectTarget = req.url;
+    socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    socket.end();
+  });
+  await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  const port = proxy.address().port;
+
+  const fetchWithProxy = createProxyFetch(() => `http://127.0.0.1:${port}`);
+  await assert.rejects(fetchWithProxy("https://example.com/resource"));
+
+  proxy.close();
+  assert.equal(connectTarget, "example.com:443");
 });

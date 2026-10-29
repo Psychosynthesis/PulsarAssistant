@@ -3,6 +3,8 @@ import * as path from "path";
 import * as acp from "@agentclientprotocol/sdk";
 import {
   OpenAiChatClient,
+  OpenAiResponsesClient,
+  type ChatClient,
   type ChatMessage,
   type ChatToolCall,
 } from "../openai-client";
@@ -21,9 +23,12 @@ import {
   requestToolPermission,
   toolsForPolicy,
   ToolRejected,
+  WEB_FETCH_TOOL,
+  WEB_SEARCH_TOOL,
   type BuiltinHost,
   type ToolExecutionContext,
 } from "./tools";
+import { deepseekFetch, deepseekSearch } from "../web-search";
 import { contentBlocksToText } from "../session/prompt-text";
 import {
   API_HOST_CONTEXT_MESSAGE,
@@ -377,8 +382,10 @@ function toChatMessages(messages: StoredContextMessage[]): ChatMessage[] {
 
 export class BuiltinAgent {
   private sessions = new Map<string, SessionState>();
-  private readonly client: OpenAiChatClient;
+  private readonly client: ChatClient;
   private target: OpenaiLaunchTarget;
+  private readonly getShowThoughts: () => boolean;
+  private readonly fetchImpl?: typeof fetch;
 
   constructor(
     private readonly conn: BuiltinHost,
@@ -390,12 +397,25 @@ export class BuiltinAgent {
     fetchImpl?: typeof fetch,
   ) {
     this.target = target;
-    this.client = new OpenAiChatClient({
+    this.fetchImpl = fetchImpl;
+    this.getShowThoughts = getIncludeReasoning ?? (() => true);
+    const baseClientOptions = {
       baseUrl: target.baseUrl,
       apiKey: target.apiKey,
-      includeReasoning: getIncludeReasoning,
+      stream: target.stream,
       ...(fetchImpl ? { fetch: fetchImpl } : {}),
-    });
+    };
+    if (target.apiFormat === "responses") {
+      this.client = new OpenAiResponsesClient({
+        ...baseClientOptions,
+        includeReasoning: this.getShowThoughts,
+      });
+    } else {
+      this.client = new OpenAiChatClient({
+        ...baseClientOptions,
+        includeReasoning: this.getShowThoughts,
+      });
+    }
   }
 
   get activeTarget(): OpenaiLaunchTarget {
@@ -889,6 +909,31 @@ export class BuiltinAgent {
     return Math.max(1, Math.min(1000, Math.trunc(configured)));
   }
 
+  private deepSeekApiKey(): string | null {
+    try {
+      if (new URL(this.target.baseUrl).hostname === "api.deepseek.com") {
+        return this.target.apiKey;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  private resolveWebSearchMode(): "off" | "native" | "local" {
+    const configured = this.target.webSearch;
+    if (configured === "off") return "off";
+    const nativeAvailable = this.target.apiFormat === "responses";
+    const localAvailable = this.deepSeekApiKey() != null;
+    if (configured === "native") return nativeAvailable ? "native" : "off";
+    if (configured === "local") return localAvailable ? "local" : "off";
+    // "auto": prefer the provider's native search, otherwise a configured
+    // local backend (currently DeepSeek).
+    if (nativeAvailable) return "native";
+    if (localAvailable) return "local";
+    return "off";
+  }
+
   private async runTurn(
     sessionId: string,
     session: SessionState,
@@ -898,6 +943,11 @@ export class BuiltinAgent {
     for (let i = 0; i < maxIterations; i++) {
       if (signal.aborted) return { stopReason: "cancelled" };
       const messages = await this.prepareOutboundMessages(session);
+      const tools = toolsForPolicy(this.getPolicy());
+      const webSearchMode = this.resolveWebSearchMode();
+      if (webSearchMode === "local") {
+        tools.push(WEB_SEARCH_TOOL, WEB_FETCH_TOOL);
+      }
       const assistantMessageId = newId();
       let assistantText = "";
       let assistantReasoning = "";
@@ -906,8 +956,12 @@ export class BuiltinAgent {
         {
           model: this.target.model,
           messages,
-          tools: toolsForPolicy(this.getPolicy()),
+          tools,
           tool_choice: "auto",
+          ...(webSearchMode === "native" ? { webSearch: true } : {}),
+          ...(this.target.reasoningEffort
+            ? { reasoningEffort: this.target.reasoningEffort }
+            : {}),
         },
         signal,
         {
@@ -923,7 +977,9 @@ export class BuiltinAgent {
       )) {
         if (event.type === "thought" && event.text) {
           assistantReasoning += event.text;
-          this.conn.onThought?.(event.text);
+          if (this.getShowThoughts()) {
+            this.conn.onThought?.(event.text);
+          }
         } else if (event.type === "text" && event.text) {
           assistantText = `${assistantText}${event.text}`;
           await this.conn.sessionUpdate({
@@ -934,6 +990,14 @@ export class BuiltinAgent {
               content: { type: "text", text: event.text },
             },
           });
+        } else if (event.type === "sources" && event.sources.length > 0) {
+          const formatted = event.sources
+            .slice(0, 5)
+            .map((source) =>
+              source.title ? `${source.title} (${source.url})` : source.url,
+            )
+            .join(" · ");
+          this.conn.onStatusNote?.(`Web search: ${formatted}`);
         } else if (event.type === "tool_calls") {
           toolCalls = event.calls;
         }
@@ -1035,6 +1099,8 @@ export class BuiltinAgent {
     signal: AbortSignal,
   ): Promise<void> {
     const toolCallId = call.id || newId();
+    const searchApiKey =
+      this.resolveWebSearchMode() === "local" ? this.deepSeekApiKey() : null;
     const toolCtx: ToolExecutionContext = {
       host: this.conn,
       sessionId,
@@ -1042,6 +1108,18 @@ export class BuiltinAgent {
       signal,
       policy: this.getPolicy(),
       fileTree: this.getFileTree ? this.getFileTree() : null,
+      ...(searchApiKey
+        ? {
+            webSearch: {
+              search: (query, searchSignal) =>
+                deepseekSearch(searchApiKey, query, searchSignal, this.fetchImpl),
+            },
+            webFetch: {
+              fetch: (url, fetchSignal) =>
+                deepseekFetch(searchApiKey, url, fetchSignal, this.fetchImpl),
+            },
+          }
+        : {}),
     };
     let meta;
     try {

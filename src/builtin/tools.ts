@@ -9,6 +9,8 @@ import { ProjectFileTree } from "../file-btree";
 import { toPosixPath } from "../paths";
 import type { ProjectPolicy } from "../project-policy";
 import type { ChatTool } from "../openai-client";
+import { formatSearchResults } from "../web-search";
+import type { WebSearchResult } from "../web-search";
 
 export const TOOL_DEFINITIONS: ChatTool[] = [
   {
@@ -323,6 +325,43 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
   },
 ];
 
+export const WEB_SEARCH_TOOL: ChatTool = {
+  type: "function",
+  function: {
+    name: "web_search",
+    description:
+      "Search the web and return a short list of results with titles, URLs and snippets. Use this to look up current information that is not in the project files or in your training data.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: { type: "string", description: "The search query." },
+      },
+      required: ["query"],
+    },
+  },
+};
+
+export const WEB_FETCH_TOOL: ChatTool = {
+  type: "function",
+  function: {
+    name: "web_fetch",
+    description:
+      "Fetch the text content of a public web page by absolute URL. Returns the page content up to a size limit. Local and private network addresses are not allowed.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        url: {
+          type: "string",
+          description: "Absolute http(s) URL to fetch.",
+        },
+      },
+      required: ["url"],
+    },
+  },
+};
+
 export function toolsForPolicy(policy: ProjectPolicy): ChatTool[] {
   return TOOL_DEFINITIONS.filter((tool) => {
     const name = tool.function.name;
@@ -372,6 +411,12 @@ export type ToolExecutionContext = {
   signal: AbortSignal;
   policy: ProjectPolicy;
   fileTree?: ProjectFileTree | null;
+  webSearch?: {
+    search(query: string, signal: AbortSignal): Promise<WebSearchResult[]>;
+  };
+  webFetch?: {
+    fetch(url: string, signal: AbortSignal): Promise<string>;
+  };
 };
 
 export type ToolMeta = {
@@ -603,6 +648,24 @@ export function describeToolCall(
         needsPermission: false,
       };
     }
+    case "web_search": {
+      const query = stringArg(args, "query") ?? "";
+      return {
+        title: query ? `Search web for "${query}"` : "Web search",
+        kind: "search",
+        rawInput: args,
+        needsPermission: false,
+      };
+    }
+    case "web_fetch": {
+      const url = stringArg(args, "url") ?? "";
+      return {
+        title: url ? `Fetch ${url}` : "Fetch page",
+        kind: "read",
+        rawInput: args,
+        needsPermission: false,
+      };
+    }
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -666,9 +729,43 @@ export async function executeTool(
       return runBuildTool(ctx);
     case "unpin_file":
       return unpinFileTool(ctx, args);
+    case "web_search":
+      return webSearchTool(ctx, args);
+    case "web_fetch":
+      return webFetchTool(ctx, args);
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
+}
+
+async function webSearchTool(
+  ctx: ToolExecutionContext,
+  args: Record<string, unknown>,
+): Promise<ToolSuccess> {
+  const query = stringArg(args, "query") ?? "";
+  if (!query.trim()) {
+    throw new Error("web_search requires a query.");
+  }
+  if (!ctx.webSearch) {
+    throw new Error("Web search is not available for this agent.");
+  }
+  const results = await ctx.webSearch.search(query.trim(), ctx.signal);
+  return { output: formatSearchResults(results, query.trim()) };
+}
+
+async function webFetchTool(
+  ctx: ToolExecutionContext,
+  args: Record<string, unknown>,
+): Promise<ToolSuccess> {
+  const url = stringArg(args, "url") ?? "";
+  if (!url.trim()) {
+    throw new Error("web_fetch requires a URL.");
+  }
+  if (!ctx.webFetch) {
+    throw new Error("Web page fetching is not available for this agent.");
+  }
+  const content = await ctx.webFetch.fetch(url.trim(), ctx.signal);
+  return { output: content };
 }
 
 async function unpinFileTool(

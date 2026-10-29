@@ -1,7 +1,7 @@
 {
   "name": "pulsar-assistant",
   "main": "./lib/main.js",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "Coding agent for Pulsar",
   "keywords": [ "acp", "agent", "ai", "assistant", "chatgpt", "gpt", "llm" ],
   "license": "MIT",
@@ -71,8 +71,8 @@
       "type": "boolean",
       "default": true,
       "order": 1,
-      "title": "Request model reasoning",
-      "description": "Ask the API to include model thoughts (include_reasoning). Some providers such as Gemini only stream their reasoning when this flag is sent. Disable it if a provider rejects the flag."
+      "title": "Show thoughts",
+      "description": "Show model reasoning summaries in the composer status line. For providers that only stream reasoning when asked (e.g. Gemini), this also requests it. For OpenAI Responses it controls the reasoning summary. Disable it to hide thoughts and avoid requesting them where possible."
     },
     "proxyUrl": {
       "type": "string",

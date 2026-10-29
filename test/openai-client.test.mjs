@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { OpenAiChatClient, fetchOpenAiModels } from "../lib/openai-client.js";
+import {
+  OpenAiChatClient,
+  OpenAiResponsesClient,
+  fetchOpenAiModels,
+} from "../lib/openai-client.js";
 
 test("OpenAiChatClient: non-stream complete yields text then done", async () => {
   const fetchImpl = async () =>
@@ -467,4 +471,272 @@ test("fetchOpenAiModels: throws when the list is empty", async () => {
     }),
     /Model list is empty/,
   );
+});
+
+test("OpenAiChatClient: omits include_reasoning for the official OpenAI API", async () => {
+  let capturedBody = null;
+  const fetchImpl = async (_url, init) => {
+    capturedBody = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+      { status: 200 },
+    );
+  };
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "k",
+    stream: false,
+    fetch: fetchImpl,
+    includeReasoning: true,
+  });
+  for await (const _event of client.complete(
+    { model: "gpt-4o", messages: [] },
+    new AbortController().signal,
+  )) {
+    // drain
+  }
+  assert.equal("include_reasoning" in capturedBody, false);
+});
+
+test("OpenAiChatClient: sends reasoning_effort none for OpenAI reasoning models with tools", async () => {
+  let capturedBody = null;
+  const fetchImpl = async (_url, init) => {
+    capturedBody = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+      { status: 200 },
+    );
+  };
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "k",
+    stream: false,
+    fetch: fetchImpl,
+  });
+  for await (const _event of client.complete(
+    {
+      model: "gpt-5.6-luna",
+      messages: [],
+      tools: [{ type: "function", function: { name: "read_file", parameters: {} } }],
+    },
+    new AbortController().signal,
+  )) {
+    // drain
+  }
+  assert.equal(capturedBody.reasoning_effort, "none");
+});
+
+test("OpenAiChatClient: does not add reasoning_effort for non-OpenAI providers", async () => {
+  let capturedBody = null;
+  const fetchImpl = async (_url, init) => {
+    capturedBody = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+      { status: 200 },
+    );
+  };
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.deepseek.com/v1",
+    apiKey: "k",
+    stream: false,
+    fetch: fetchImpl,
+  });
+  for await (const _event of client.complete(
+    {
+      model: "deepseek-chat",
+      messages: [],
+      tools: [{ type: "function", function: { name: "read_file", parameters: {} } }],
+    },
+    new AbortController().signal,
+  )) {
+    // drain
+  }
+  assert.equal("reasoning_effort" in capturedBody, false);
+});
+
+test("OpenAiResponsesClient: posts to /responses and parses text, reasoning and function_call", async () => {
+  const fetchImpl = async (url, init) => {
+    assert.equal(url, "https://api.openai.com/v1/responses");
+    const body = JSON.parse(String(init.body));
+    assert.equal(body.model, "gpt-5.6-luna");
+    assert.equal(body.input[0].role, "user");
+    assert.equal(body.input[0].content[0].text, "hi");
+    assert.equal(body.tools[0].type, "function");
+    assert.equal(body.tools[0].name, "read_file");
+    return new Response(
+      JSON.stringify({
+        status: "incomplete",
+        output: [
+          { type: "reasoning", summary: [{ type: "summary_text", text: "plan" }] },
+          { type: "message", role: "assistant", content: [{ type: "output_text", text: "final" }] },
+          { type: "function_call", call_id: "c1", name: "read_file", arguments: '{"path":"a.ts"}' },
+        ],
+      }),
+      { status: 200 },
+    );
+  };
+  const client = new OpenAiResponsesClient({
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "k",
+    fetch: fetchImpl,
+  });
+  const events = [];
+  for await (const event of client.complete(
+    {
+      model: "gpt-5.6-luna",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ type: "function", function: { name: "read_file", parameters: {} } }],
+    },
+    new AbortController().signal,
+  )) {
+    events.push(event);
+  }
+  assert.deepEqual(events, [
+    { type: "thought", text: "plan" },
+    { type: "text", text: "final" },
+    {
+      type: "tool_calls",
+      calls: [
+        { id: "c1", type: "function", function: { name: "read_file", arguments: '{"path":"a.ts"}' } },
+      ],
+    },
+    { type: "done", finishReason: "stop" },
+  ]);
+});
+
+test("OpenAiResponsesClient: maps function_call_output items from tool messages", async () => {
+  let capturedBody = null;
+  const fetchImpl = async (_url, init) => {
+    capturedBody = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({ status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "done" }] }] }),
+      { status: 200 },
+    );
+  };
+  const client = new OpenAiResponsesClient({
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "k",
+    fetch: fetchImpl,
+  });
+  for await (const _event of client.complete(
+    {
+      model: "gpt-5.6-luna",
+      messages: [
+        { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "c1", content: "file body" },
+      ],
+    },
+    new AbortController().signal,
+  )) {
+    // drain
+  }
+  assert.equal(capturedBody.input[0].type, "function_call");
+  assert.equal(capturedBody.input[0].call_id, "c1");
+  assert.equal(capturedBody.input[1].type, "function_call_output");
+  assert.equal(capturedBody.input[1].call_id, "c1");
+  assert.equal(capturedBody.input[1].output, "file body");
+});
+
+test("OpenAiResponsesClient: stream path parses SSE deltas", async () => {
+  const sse = [
+    'data: {"type":"response.output_item.added","item":{"id":"fc1","type":"function_call","name":"read_file"}}\n\n',
+    'data: {"type":"response.function_call_arguments.delta","item_id":"fc1","delta":"{\\"path\\""}\n\n',
+    'data: {"type":"response.function_call_arguments.delta","item_id":"fc1","delta":":\\"a.ts\\"}"}\n\n',
+    'data: {"type":"response.output_item.done","item":{"id":"fc1","type":"function_call","name":"read_file","arguments":"{\\"path\\":\\"a.ts\\"}"}}\n\n',
+    'data: {"type":"response.reasoning_summary_text.delta","delta":"think"}\n\n',
+    'data: {"type":"response.output_text.delta","delta":"Hel"}\n\n',
+    'data: {"type":"response.output_text.delta","delta":"lo"}\n\n',
+    'data: {"type":"response.completed"}\n\n',
+  ].join("");
+  const client = new OpenAiResponsesClient({
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "k",
+    stream: true,
+    fetch: async () =>
+      new Response(sse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+  });
+  const events = [];
+  for await (const event of client.complete(
+    { model: "gpt-5.6-luna", messages: [] },
+    new AbortController().signal,
+  )) {
+    events.push(event);
+  }
+  assert.deepEqual(events, [
+    { type: "thought", text: "think" },
+    { type: "text", text: "Hel" },
+    { type: "text", text: "lo" },
+    {
+      type: "tool_calls",
+      calls: [
+        { id: "fc1", type: "function", function: { name: "read_file", arguments: '{"path":"a.ts"}' } },
+      ],
+    },
+    { type: "done", finishReason: "stop" },
+  ]);
+});
+
+test("OpenAiResponsesClient: maps reasoning effort and summary for reasoning models", async () => {
+  let capturedBody = null;
+  const fetchImpl = async (_url, init) => {
+    capturedBody = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({ status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }] }),
+      { status: 200 },
+    );
+  };
+  const client = new OpenAiResponsesClient({
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "k",
+    fetch: fetchImpl,
+    includeReasoning: true,
+  });
+  for await (const _event of client.complete(
+    { model: "gpt-5.6-luna", messages: [], reasoningEffort: "high" },
+    new AbortController().signal,
+  )) {
+    // drain
+  }
+  assert.deepEqual(capturedBody.reasoning, { effort: "high", summary: "auto" });
+
+  const noThoughtsClient = new OpenAiResponsesClient({
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "k",
+    fetch: fetchImpl,
+    includeReasoning: false,
+  });
+  for await (const _event of noThoughtsClient.complete(
+    { model: "gpt-5.6-luna", messages: [] },
+    new AbortController().signal,
+  )) {
+    // drain
+  }
+  assert.deepEqual(capturedBody.reasoning, { summary: "none" });
+});
+
+test("OpenAiResponsesClient: does not send reasoning for non-reasoning models", async () => {
+  let capturedBody = null;
+  const fetchImpl = async (_url, init) => {
+    capturedBody = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({ status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }] }),
+      { status: 200 },
+    );
+  };
+  const client = new OpenAiResponsesClient({
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "k",
+    fetch: fetchImpl,
+    includeReasoning: true,
+  });
+  for await (const _event of client.complete(
+    { model: "gpt-4o", messages: [] },
+    new AbortController().signal,
+  )) {
+    // drain
+  }
+  assert.equal("reasoning" in capturedBody, false);
 });

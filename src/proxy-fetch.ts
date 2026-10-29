@@ -2,6 +2,7 @@ import * as http from "http";
 import * as https from "https";
 import * as net from "net";
 import * as tls from "tls";
+import type { Duplex } from "stream";
 
 /**
  * Optional HTTP(S) proxy transport for API requests.
@@ -26,10 +27,30 @@ export type ProxyConfig = {
   password?: string;
 };
 
+const TUNNEL_TIMEOUT_MS = 15000;
+const TLS_TIMEOUT_MS = 15000;
+
+function stripBrackets(hostname: string): string {
+  return hostname.replace(/^\[|\]$/g, "");
+}
+
+/**
+ * Returns a log-safe proxy URL with credentials replaced by `***`.
+ * Empty or unparsable input yields an empty string.
+ */
+export function redactProxyUrl(raw: string | null | undefined): string {
+  const proxy = parseProxyUrl(raw);
+  if (!proxy) return "";
+  const auth = proxy.username !== undefined ? "***:***@" : "";
+  const host = proxy.host.includes(":") ? `[${proxy.host}]` : proxy.host;
+  return `${proxy.protocol}//${auth}${host}:${proxy.port}`;
+}
+
 /**
  * Parses a proxy URL. Accepts `http://` / `https://` schemes with optional
  * credentials (`http://USER:PASS@HOST:PORT`). A scheme-less value is treated as
- * `http://`. Returns `null` for empty or malformed input.
+ * `http://`. Returns `null` for empty or malformed input; rejects non-empty
+ * path/query/hash and invalid ports or credentials.
  */
 export function parseProxyUrl(
   raw: string | null | undefined,
@@ -52,6 +73,11 @@ export function parseProxyUrl(
 
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   if (!url.hostname) return null;
+  // A proxy URL must not carry a path, query or fragment.
+  if (url.pathname !== "/") return null;
+  if (url.search || url.hash) return null;
+  // `http://:pass@host` has an empty username; treat it as malformed.
+  if (url.username === "" && url.password) return null;
 
   const port = url.port
     ? Number(url.port)
@@ -62,7 +88,7 @@ export function parseProxyUrl(
 
   return {
     protocol: url.protocol,
-    host: url.hostname,
+    host: stripBrackets(url.hostname),
     port,
     ...(url.username
       ? { username: decodeURIComponent(url.username) }
@@ -131,10 +157,11 @@ function targetPort(url: URL): number {
 }
 
 /**
- * Builds a fetch-compatible function. When the resolver is omitted (or returns
- * an empty/unparsable value), requests go through the native `globalThis.fetch`
- * unchanged. Otherwise every request is routed through the configured proxy.
- * The resolver is called per request, so config changes apply without restart.
+ * Builds a fetch-compatible function. When the resolver is omitted, requests go
+ * through the native `globalThis.fetch` unchanged. When it returns an empty
+ * value, the proxy is disabled. A non-empty but malformed value throws instead
+ * of silently falling back to a direct connection. The resolver is called per
+ * request, so config changes apply without restart.
  */
 export function createProxyFetch(
   resolveProxyUrl?: () => string | null | undefined,
@@ -146,8 +173,19 @@ export function createProxyFetch(
   if (!resolveProxyUrl) return nativeFetch;
 
   return (input, init) => {
-    const proxy = parseProxyUrl(resolveProxyUrl());
-    if (!proxy) return nativeFetch(input, init);
+    const raw = resolveProxyUrl();
+    if (!raw || !raw.trim()) return nativeFetch(input, init);
+
+    const proxy = parseProxyUrl(raw);
+    if (!proxy) {
+      // Keep the fetch-compatible contract: fail with a rejected promise, not
+      // a synchronous throw.
+      return Promise.reject(
+        new Error(
+          "Invalid proxy configuration. Expected http(s)://[user:pass@]host[:port].",
+        ),
+      );
+    }
     return proxyFetch(input, init, proxy);
   };
 }
@@ -168,7 +206,10 @@ async function proxyFetch(
   }
 
   if (req.url.protocol === "https:") {
-    const tunnel = await openTunnel(proxy, req.url.host, req.signal);
+    // CONNECT request-target must include the destination port, even when it
+    // is the scheme default (RFC 9112 §3.2.3).
+    const authority = `${req.url.hostname}:${targetPort(req.url)}`;
+    const tunnel = await openTunnel(proxy, authority, req.signal);
     const socket = await wrapTls(tunnel, req.url.hostname, req.signal);
     return requestOverSocket(socket, req, targetPort(req.url));
   }
@@ -189,120 +230,168 @@ function abortWhen(
   return () => signal.removeEventListener("abort", handler);
 }
 
-function connectTcp(
-  host: string,
-  port: number,
+/**
+ * Opens a proxy tunnel for an HTTPS destination using Node's native CONNECT
+ * support (`http.request`/`https.request` with method `CONNECT` and the
+ * `connect` event), rather than hand-writing the CONNECT exchange.
+ */
+function openTunnel(
+  proxy: ProxyConfig,
+  authority: string,
   signal: AbortSignal | undefined,
 ): Promise<net.Socket> {
+  const transport = proxy.protocol === "https:" ? https : http;
+  const auth = proxyAuthorizationHeader(proxy);
+
   return new Promise<net.Socket>((resolve, reject) => {
+    let settled = false;
     let removeAbort: (() => void) | null = null;
-    const socket = net.connect({ host, port });
-    socket.setNoDelay(true);
-    socket.once("connect", () => {
-      removeAbort?.();
-      resolve(socket);
+
+    const nodeReq = transport.request({
+      hostname: stripBrackets(proxy.host),
+      port: proxy.port,
+      method: "CONNECT",
+      path: authority,
+      headers: {
+        host: authority,
+        ...(auth ? { "proxy-authorization": auth } : {}),
+      },
+      agent: false,
+      setHost: false,
     });
-    socket.once("error", reject);
-    removeAbort = abortWhen(signal, () =>
-      socket.destroy(new Error("Aborted")),
-    );
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      removeAbort?.();
+      nodeReq.removeListener("connect", onConnect);
+      nodeReq.removeListener("error", onError);
+      nodeReq.removeListener("close", onClose);
+    };
+    const finish = (err: Error | null, socket?: net.Socket) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (err) reject(err);
+      else resolve(socket as net.Socket);
+    };
+
+    const onConnect = (
+      res: http.IncomingMessage,
+      socket: Duplex,
+      head: Buffer,
+    ) => {
+      const code = res.statusCode ?? 0;
+      if (code !== 200) {
+        socket.destroy();
+        if (code === 407) {
+          finish(
+            new Error(
+              `Proxy authentication required (407) by ${proxy.host}:${proxy.port}. Check the proxy username and password.`,
+            ),
+          );
+        } else {
+          finish(
+            new Error(
+              `Proxy CONNECT failed: HTTP ${code} ${res.statusMessage ?? ""}`.trim(),
+            ),
+          );
+        }
+        return;
+      }
+      // `head` holds any bytes already read after the CONNECT headers.
+      if (head && head.length > 0) socket.unshift(head);
+      finish(null, socket as net.Socket);
+    };
+    const onError = (err: Error) => finish(err);
+    const onClose = () =>
+      finish(
+        new Error(
+          `Proxy connection closed before CONNECT completed (${proxy.host}:${proxy.port}).`,
+        ),
+      );
+
+    const timeout = setTimeout(() => {
+      nodeReq.destroy(
+        new Error(
+          `Timed out establishing the proxy tunnel via ${proxy.host}:${proxy.port}.`,
+        ),
+      );
+    }, TUNNEL_TIMEOUT_MS);
+
+    nodeReq.on("connect", onConnect);
+    nodeReq.once("error", onError);
+    nodeReq.once("close", onClose);
+    removeAbort = abortWhen(signal, () => {
+      nodeReq.destroy(new Error("Aborted"));
+    });
+    if (!signal?.aborted) nodeReq.end();
   });
 }
 
+/**
+ * Upgrades an established socket to TLS for the destination. The TLS socket
+ * does not own the underlying connection until the handshake succeeds, so the
+ * source socket is destroyed on failure. SNI is set only for DNS names, never
+ * for IP literals.
+ */
 function wrapTls(
   socket: net.Socket,
   servername: string,
   signal: AbortSignal | undefined,
 ): Promise<tls.TLSSocket> {
   return new Promise<tls.TLSSocket>((resolve, reject) => {
+    let settled = false;
     let removeAbort: (() => void) | null = null;
-    const tlsSocket = tls.connect({ socket, servername }, () => {
-      removeAbort?.();
-      resolve(tlsSocket);
-    });
-    tlsSocket.once("error", reject);
-    removeAbort = abortWhen(signal, () =>
-      tlsSocket.destroy(new Error("Aborted")),
-    );
-  });
-}
-
-function sendConnect(
-  socket: net.Socket,
-  authority: string,
-  proxy: ProxyConfig,
-  signal: AbortSignal | undefined,
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    let removeAbort: (() => void) | null = null;
-    const auth = proxyAuthorizationHeader(proxy);
-    const head =
-      `CONNECT ${authority} HTTP/1.1\r\n` +
-      `Host: ${authority}\r\n` +
-      (auth ? `Proxy-Authorization: ${auth}\r\n` : "") +
-      `Proxy-Connection: keep-alive\r\n\r\n`;
+    const hostname = stripBrackets(servername);
+    const options: tls.ConnectionOptions = {
+      socket,
+      rejectUnauthorized: true,
+      ...(hostname && !net.isIP(hostname) ? { servername: hostname } : {}),
+    };
+    const tlsSocket = tls.connect(options);
 
     const cleanup = () => {
-      socket.removeListener("data", onData);
-      socket.removeListener("error", onError);
+      clearTimeout(timeout);
       removeAbort?.();
+      tlsSocket.removeListener("secureConnect", onSecure);
+      tlsSocket.removeListener("error", onError);
+      tlsSocket.removeListener("close", onClose);
     };
-
-    const fail = (err: Error) => {
+    const finish = (err: Error | null) => {
+      if (settled) return;
+      settled = true;
       cleanup();
+      if (err) {
+        socket.destroy();
+        reject(err);
+      } else {
+        resolve(tlsSocket);
+      }
+    };
+    const onSecure = () => finish(null);
+    const onError = (err: Error) => finish(err);
+    const onClose = () =>
+      finish(
+        new Error(
+          `TLS handshake closed before it completed (${hostname}).`,
+        ),
+      );
+
+    const timeout = setTimeout(() => {
       socket.destroy();
-      reject(err);
-    };
+      tlsSocket.destroy(
+        new Error(`Timed out establishing TLS to ${hostname}.`),
+      );
+    }, TLS_TIMEOUT_MS);
 
-    const onError = (err: Error) => fail(err);
-
-    let buffer = "";
-    const onData = (chunk: Buffer) => {
-      buffer += chunk.toString("latin1");
-      const idx = buffer.indexOf("\r\n\r\n");
-      // The CONNECT head is small; accumulate until the separator arrives.
-      if (idx === -1) {
-        if (buffer.length > 8192) fail(new Error("Proxy CONNECT response too large."));
-        return;
-      }
-      const headText = buffer.slice(0, idx);
-      const rest = buffer.slice(idx + 4);
-      cleanup();
-      const statusLine = headText.split("\r\n")[0] ?? "";
-      const match = /^HTTP\/\d(?:\.\d)? (\d{3})/.exec(statusLine);
-      const code = match ? Number(match[1]) : 0;
-      if (code !== 200) {
-        fail(new Error(`Proxy CONNECT failed: ${statusLine || code}`));
-        return;
-      }
-      if (rest.length > 0) {
-        socket.unshift(Buffer.from(rest, "latin1"));
-      }
-      resolve();
-    };
-
-    socket.on("data", onData);
-    socket.once("error", onError);
-    removeAbort = abortWhen(signal, () => fail(new Error("Aborted")));
-    socket.write(head);
+    tlsSocket.once("secureConnect", onSecure);
+    tlsSocket.once("error", onError);
+    tlsSocket.once("close", onClose);
+    removeAbort = abortWhen(signal, () => {
+      socket.destroy();
+      tlsSocket.destroy(new Error("Aborted"));
+    });
   });
-}
-
-async function openTunnel(
-  proxy: ProxyConfig,
-  authority: string,
-  signal: AbortSignal | undefined,
-): Promise<net.Socket> {
-  const base = await connectTcp(proxy.host, proxy.port, signal);
-  const proxySocket =
-    proxy.protocol === "https:" ? await wrapTls(base, proxy.host, signal) : base;
-  try {
-    await sendConnect(proxySocket, authority, proxy, signal);
-    return proxySocket;
-  } catch (err) {
-    proxySocket.destroy();
-    throw err;
-  }
 }
 
 function wireRequest(
@@ -311,16 +400,18 @@ function wireRequest(
   reject: (err: Error) => void,
 ): void {
   nodeReq.once("error", reject);
+  if (req.signal?.aborted) {
+    nodeReq.destroy(new Error("Aborted"));
+    return;
+  }
+  let removeAbort: (() => void) | null = null;
   if (req.signal) {
-    if (req.signal.aborted) {
-      nodeReq.destroy(new Error("Aborted"));
-    } else {
-      const onAbort = () => nodeReq.destroy(new Error("Aborted"));
-      req.signal.addEventListener("abort", onAbort, { once: true });
-      nodeReq.once("close", () =>
-        req.signal?.removeEventListener("abort", onAbort),
-      );
-    }
+    removeAbort = abortWhen(req.signal, () =>
+      nodeReq.destroy(new Error("Aborted")),
+    );
+    // The request phase is done once the body is flushed; the response body is
+    // cancelled separately inside toWebResponse.
+    nodeReq.once("close", () => removeAbort?.());
   }
   if (req.body) nodeReq.write(req.body);
   nodeReq.end();
@@ -339,14 +430,14 @@ function requestAbsoluteForm(
   return new Promise<Response>((resolve, reject) => {
     const nodeReq = transport.request(
       {
-        host: proxy.host,
+        hostname: stripBrackets(proxy.host),
         port: proxy.port,
         method: req.method,
         path: req.url.toString(),
         headers,
         setHost: false,
       },
-      (res) => resolve(toWebResponse(res)),
+      (res) => resolve(toWebResponse(res, req.signal)),
     );
     wireRequest(nodeReq, req, reject);
   });
@@ -370,7 +461,7 @@ function requestOverSocket(
 
     const nodeReq = http.request(
       {
-        host: req.url.hostname,
+        host: stripBrackets(req.url.hostname),
         port,
         method: req.method,
         path: req.url.pathname + req.url.search,
@@ -378,37 +469,89 @@ function requestOverSocket(
         setHost: false,
         agent,
       },
-      (res) => resolve(toWebResponse(res)),
+      (res) => resolve(toWebResponse(res, req.signal)),
     );
     wireRequest(nodeReq, req, reject);
   });
 }
 
-function toWebResponse(res: http.IncomingMessage): Response {
+function toWebResponse(
+  res: http.IncomingMessage,
+  signal: AbortSignal | undefined,
+): Response {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(res.headers)) {
     if (value === undefined) continue;
     headers[key] = Array.isArray(value) ? value.join(", ") : String(value);
   }
 
+  let settled = false;
+  let cleanup: (() => void) | null = null;
+
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      let settled = false;
-      res.on("data", (chunk: Buffer) => {
-        if (!settled) controller.enqueue(new Uint8Array(chunk));
-      });
-      res.on("end", () => {
+      let removeAbort: (() => void) | null = null;
+
+      cleanup = () => {
+        removeAbort?.();
+        res.removeListener("data", onData);
+        res.removeListener("end", onEnd);
+        res.removeListener("aborted", onAborted);
+        res.removeListener("error", onError);
+        res.removeListener("close", onClose);
+      };
+      const finish = (err?: Error) => {
         if (settled) return;
         settled = true;
-        controller.close();
-      });
-      res.on("error", (err: Error) => {
+        cleanup?.();
+        if (err) controller.error(err);
+        else controller.close();
+      };
+
+      const onData = (chunk: Buffer) => {
         if (settled) return;
-        settled = true;
-        controller.error(err);
-      });
+        controller.enqueue(new Uint8Array(chunk));
+        res.pause();
+      };
+      const onEnd = () => finish();
+      const onAborted = () =>
+        finish(new Error("Response body aborted before completion."));
+      const onError = (err: Error) => finish(err);
+      const onClose = () => {
+        if (settled) return;
+        // A normal completion emits `end` before `close`; `complete` guards
+        // against treating an already-buffered aborted response as a clean end.
+        if (res.complete) return;
+        finish(new Error("Response stream closed before completion."));
+      };
+
+      const onAbortSignal = () => {
+        res.destroy(new Error("Aborted"));
+      };
+      removeAbort = signal ? abortWhen(signal, onAbortSignal) : null;
+
+      if (res.aborted) {
+        finish(new Error("Response body aborted before completion."));
+        return;
+      }
+      if (res.complete) {
+        finish();
+        return;
+      }
+
+      res.on("data", onData);
+      res.once("end", onEnd);
+      res.once("aborted", onAborted);
+      res.once("error", onError);
+      res.once("close", onClose);
+      res.pause();
+    },
+    pull() {
+      res.resume();
     },
     cancel() {
+      settled = true;
+      cleanup?.();
       res.destroy();
     },
   });
