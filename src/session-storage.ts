@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import type { ChatToolCall } from "./openai-client";
+import type { ChatToolCall, ResponsesReasoningItem } from "./openai-client";
 
 export interface StoredToolCallMetadata {
   toolName?: string;
@@ -24,6 +24,7 @@ export interface StoredContextMessage {
   tool_calls?: ChatToolCall[];
   tool_call_id?: string;
   reasoning_content?: string | null;
+  responses_reasoning_items?: ResponsesReasoningItem[];
   metadata?: StoredToolCallMetadata;
 }
 

@@ -667,10 +667,10 @@ test("OpenAiResponsesClient: maps function_call_output items from tool messages"
 
 test("OpenAiResponsesClient: stream path parses SSE deltas", async () => {
   const sse = [
-    'data: {"type":"response.output_item.added","item":{"id":"fc1","type":"function_call","name":"read_file"}}\n\n',
+    'data: {"type":"response.output_item.added","item":{"id":"fc1","call_id":"call1","type":"function_call","name":"read_file"}}\n\n',
     'data: {"type":"response.function_call_arguments.delta","item_id":"fc1","delta":"{\\"path\\""}\n\n',
     'data: {"type":"response.function_call_arguments.delta","item_id":"fc1","delta":":\\"a.ts\\"}"}\n\n',
-    'data: {"type":"response.output_item.done","item":{"id":"fc1","type":"function_call","name":"read_file","arguments":"{\\"path\\":\\"a.ts\\"}"}}\n\n',
+    'data: {"type":"response.output_item.done","item":{"id":"fc1","call_id":"call1","type":"function_call","name":"read_file","arguments":"{\\"path\\":\\"a.ts\\"}"}}\n\n',
     'data: {"type":"response.reasoning_summary_text.delta","delta":"think"}\n\n',
     'data: {"type":"response.output_text.delta","delta":"Hel"}\n\n',
     'data: {"type":"response.output_text.delta","delta":"lo"}\n\n',
@@ -700,11 +700,79 @@ test("OpenAiResponsesClient: stream path parses SSE deltas", async () => {
     {
       type: "tool_calls",
       calls: [
-        { id: "fc1", type: "function", function: { name: "read_file", arguments: '{"path":"a.ts"}' } },
+        { id: "call1", type: "function", function: { name: "read_file", arguments: '{"path":"a.ts"}' } },
       ],
     },
     { type: "done", finishReason: "stop" },
   ]);
+});
+
+test("OpenAiResponsesClient: carries reasoning and call_id through a tool round trip", async () => {
+  for (const stream of [false, true]) {
+    const reasoning = { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "opaque" };
+    const requests = [];
+    const fetchImpl = async (_url, init) => {
+      requests.push(JSON.parse(String(init.body)));
+      if (requests.length === 1) {
+        if (stream) {
+          const events = [
+            { type: "response.output_item.done", item: reasoning },
+            { type: "response.output_item.added", item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "read_file" } },
+            { type: "response.output_item.done", item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "read_file", arguments: "{}" } },
+            { type: "response.completed" },
+          ];
+          return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { status: 200 });
+        }
+        return new Response(JSON.stringify({ status: "completed", output: [
+          reasoning,
+          { type: "function_call", id: "fc_1", call_id: "call_1", name: "read_file", arguments: "{}" },
+        ] }), { status: 200 });
+      }
+      if (stream) return new Response('data: {"type":"response.completed"}\n\n', { status: 200 });
+      return new Response(JSON.stringify({ status: "completed", output: [] }), { status: 200 });
+    };
+    const client = new OpenAiResponsesClient({ baseUrl: "https://api.openai.com/v1", apiKey: "k", stream, fetch: fetchImpl });
+    const messages = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "previous answer" },
+    ];
+    const events = [];
+    for await (const event of client.complete({ model: "gpt-5", messages }, new AbortController().signal)) events.push(event);
+    const calls = events.find((event) => event.type === "tool_calls").calls;
+    const items = events.find((event) => event.type === "responses_reasoning").items;
+    assert.equal(calls[0].id, "call_1");
+    assert.deepEqual(items, [reasoning]);
+    messages.push(
+      { role: "assistant", content: null, tool_calls: calls, responses_reasoning_items: items },
+      { role: "tool", tool_call_id: calls[0].id, content: "file body" },
+    );
+    for await (const _event of client.complete({ model: "gpt-5", messages }, new AbortController().signal)) {}
+    assert.deepEqual(requests[1].include, ["reasoning.encrypted_content"]);
+    assert.deepEqual(requests[1].input, [
+      { role: "user", content: [{ type: "input_text", text: "hello" }] },
+      { role: "assistant", content: [{ type: "output_text", text: "previous answer" }] },
+      reasoning,
+      { type: "function_call", call_id: "call_1", name: "read_file", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_1", output: "file body" },
+    ]);
+  }
+});
+
+test("OpenAiChatClient: does not send Responses reasoning items after switching API", async () => {
+  let body;
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.openai.com/v1", apiKey: "k", stream: false,
+    fetch: async (_url, init) => {
+      body = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }), { status: 200 });
+    },
+  });
+  for await (const _event of client.complete({ model: "gpt-4", messages: [{
+    role: "assistant", content: null,
+    tool_calls: [{ id: "call_1", type: "function", function: { name: "read_file", arguments: "{}" } }],
+    responses_reasoning_items: [{ type: "reasoning", id: "rs_1", summary: [], encrypted_content: "opaque" }],
+  }] }, new AbortController().signal)) {}
+  assert.equal("responses_reasoning_items" in body.messages[0], false);
 });
 
 test("OpenAiResponsesClient: maps reasoning effort and summary for reasoning models", async () => {

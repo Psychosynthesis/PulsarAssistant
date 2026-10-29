@@ -6,8 +6,16 @@ export type ChatMessage =
       content: string | null;
       tool_calls?: ChatToolCall[];
       reasoning_content?: string | null;
+      responses_reasoning_items?: ResponsesReasoningItem[];
     }
   | { role: "tool"; tool_call_id: string; content: string };
+
+export type ResponsesReasoningItem = {
+  type: "reasoning";
+  id: string;
+  summary: unknown[];
+  encrypted_content: string;
+};
 
 export type ChatTool = {
   type: "function";
@@ -46,6 +54,7 @@ export type ChatEvent =
   | { type: "text"; text: string }
   | { type: "thought"; text: string }
   | { type: "sources"; sources: WebSearchSource[] }
+  | { type: "responses_reasoning"; items: ResponsesReasoningItem[] }
   | { type: "tool_calls"; calls: ChatToolCall[] }
   | { type: "done"; finishReason: string };
 
@@ -607,7 +616,11 @@ export class OpenAiChatClient {
     const reasoningEffort = this.resolveReasoningEffort(request);
     const body = JSON.stringify({
       model: request.model,
-      messages: request.messages,
+      messages: request.messages.map((message) => {
+        if (message.role !== "assistant" || !message.responses_reasoning_items) return message;
+        const { responses_reasoning_items: _items, ...chatMessage } = message;
+        return chatMessage;
+      }),
       ...(request.tools?.length ? { tools: request.tools } : {}),
       ...(request.tool_choice ? { tool_choice: request.tool_choice } : {}),
       stream,
@@ -629,9 +642,14 @@ export class OpenAiChatClient {
 
 type ResponsesInputItem =
   | {
-      role: "system" | "user" | "assistant";
+      role: "system" | "user";
       content: Array<{ type: "input_text"; text: string }>;
     }
+  | {
+      role: "assistant";
+      content: Array<{ type: "output_text"; text: string }>;
+    }
+  | ResponsesReasoningItem
   | {
       type: "function_call";
       call_id: string;
@@ -668,11 +686,14 @@ function toResponsesInput(messages: ChatMessage[]): ResponsesInputItem[] {
         content: [{ type: "input_text", text: message.content }],
       });
     } else if (message.role === "assistant") {
+      if (message.tool_calls?.length) {
+        items.push(...(message.responses_reasoning_items ?? []));
+      }
       const content = message.content ?? "";
       if (content.trim().length > 0) {
         items.push({
           role: "assistant",
-          content: [{ type: "input_text", text: content }],
+          content: [{ type: "output_text", text: content }],
         });
       }
       for (const call of message.tool_calls ?? []) {
@@ -708,6 +729,18 @@ function toResponsesTools(
     items.push({ type: "web_search" });
   }
   return items.length > 0 ? items : undefined;
+}
+
+function toReasoningItem(record: Record<string, unknown>): ResponsesReasoningItem | null {
+  if (record.type !== "reasoning" || typeof record.id !== "string" || !Array.isArray(record.summary) || typeof record.encrypted_content !== "string") {
+    return null;
+  }
+  return {
+    type: "reasoning",
+    id: record.id,
+    summary: record.summary,
+    encrypted_content: record.encrypted_content,
+  };
 }
 
 function extractWebSearchSources(
@@ -791,6 +824,7 @@ export class OpenAiResponsesClient implements ChatClient {
 
     const output = Array.isArray(parsed.output) ? parsed.output : [];
     const thoughts: string[] = [];
+    const reasoningItems: ResponsesReasoningItem[] = [];
     const textParts: string[] = [];
     const calls: ChatToolCall[] = [];
     const sources: WebSearchSource[] = [];
@@ -799,6 +833,8 @@ export class OpenAiResponsesClient implements ChatClient {
       if (!item || typeof item !== "object") continue;
       const record = item as Record<string, unknown>;
       if (record.type === "reasoning") {
+        const reasoningItem = toReasoningItem(record);
+        if (reasoningItem) reasoningItems.push(reasoningItem);
         const summary = record.summary;
         if (Array.isArray(summary)) {
           for (const part of summary) {
@@ -845,6 +881,9 @@ export class OpenAiResponsesClient implements ChatClient {
       yield { type: "sources", sources };
     }
     if (calls.length > 0) {
+      if (reasoningItems.length > 0) {
+        yield { type: "responses_reasoning", items: reasoningItems };
+      }
       yield { type: "tool_calls", calls };
     }
     yield { type: "done", finishReason: "stop" };
@@ -876,7 +915,8 @@ export class OpenAiResponsesClient implements ChatClient {
     let finished = false;
     const calls: ChatToolCall[] = [];
     const sources: WebSearchSource[] = [];
-    const pendingCalls = new Map<string, { name: string; arguments: string }>();
+    const reasoningItems: ResponsesReasoningItem[] = [];
+    const pendingCalls = new Map<string, { callId: string; name: string; arguments: string }>();
 
     for await (const payload of readSseData(
       response.body,
@@ -904,7 +944,7 @@ export class OpenAiResponsesClient implements ChatClient {
       } else if (type === "response.function_call_arguments.delta") {
         const itemId = this.eventItemId(parsed);
         const delta = this.eventDelta(parsed);
-        const current = pendingCalls.get(itemId) ?? { name: "", arguments: "" };
+        const current = pendingCalls.get(itemId) ?? { callId: "", name: "", arguments: "" };
         current.arguments += delta;
         pendingCalls.set(itemId, current);
       } else if (type === "response.output_item.added") {
@@ -914,7 +954,8 @@ export class OpenAiResponsesClient implements ChatClient {
           if (record.type === "function_call") {
             const itemId = typeof record.id === "string" ? record.id : "";
             const name = typeof record.name === "string" ? record.name : "";
-            pendingCalls.set(itemId, { name, arguments: "" });
+            const callId = typeof record.call_id === "string" ? record.call_id : "";
+            pendingCalls.set(itemId, { callId, name, arguments: "" });
           }
         }
       } else if (type === "response.output_item.done") {
@@ -927,8 +968,10 @@ export class OpenAiResponsesClient implements ChatClient {
             const args = typeof record.arguments === "string" ? record.arguments : "";
             const pending = pendingCalls.get(itemId);
             pendingCalls.delete(itemId);
+            const callId = typeof record.call_id === "string" ? record.call_id : pending?.callId;
+            if (!callId) throw new Error("Responses API function call is missing call_id.");
             calls.push({
-              id: itemId,
+              id: callId,
               type: "function",
               function: {
                 name: name || pending?.name || "",
@@ -937,6 +980,9 @@ export class OpenAiResponsesClient implements ChatClient {
             });
           } else if (record.type === "web_search_call") {
             sources.push(...extractWebSearchSources(record));
+          } else if (record.type === "reasoning") {
+            const reasoningItem = toReasoningItem(record);
+            if (reasoningItem) reasoningItems.push(reasoningItem);
           }
         }
       } else if (type === "response.completed") {
@@ -950,10 +996,11 @@ export class OpenAiResponsesClient implements ChatClient {
       }
     }
 
-    for (const [id, call] of pendingCalls) {
+    for (const call of pendingCalls.values()) {
       if (call.name) {
+        if (!call.callId) throw new Error("Responses API function call is missing call_id.");
         calls.push({
-          id,
+          id: call.callId,
           type: "function",
           function: { name: call.name, arguments: call.arguments },
         });
@@ -965,7 +1012,12 @@ export class OpenAiResponsesClient implements ChatClient {
       responseBytes: receivedBytes,
     });
     if (sources.length > 0) yield { type: "sources", sources };
-    if (calls.length > 0) yield { type: "tool_calls", calls };
+    if (calls.length > 0) {
+      if (reasoningItems.length > 0) {
+        yield { type: "responses_reasoning", items: reasoningItems };
+      }
+      yield { type: "tool_calls", calls };
+    }
     yield { type: "done", finishReason: "stop" };
   }
 
@@ -1018,6 +1070,7 @@ export class OpenAiResponsesClient implements ChatClient {
       input: toResponsesInput(request.messages),
       ...(tools ? { tools } : {}),
       ...(reasoning ? { reasoning } : {}),
+      include: ["reasoning.encrypted_content"],
       stream,
     });
     const response = await this.fetchImpl(responsesUrl(this.options.baseUrl), {

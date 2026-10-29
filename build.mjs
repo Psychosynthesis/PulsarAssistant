@@ -33,6 +33,7 @@ const options = {
     "src/editor/editor-backend.ts",
     "src/builtin/tools.ts",
     "src/web-search.ts",
+    "src/open-url.ts",
   ],
   outdir: "lib",
   bundle: true,

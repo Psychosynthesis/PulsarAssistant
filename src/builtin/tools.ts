@@ -10,9 +10,23 @@ import { toPosixPath } from "../paths";
 import type { ProjectPolicy } from "../project-policy";
 import type { ChatTool } from "../openai-client";
 import { formatSearchResults } from "../web-search";
+import { openUrl } from "../open-url";
 import type { WebSearchResult } from "../web-search";
 
 export const TOOL_DEFINITIONS: ChatTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "open_url",
+      description: "Read a public HTTP(S) web page directly. Returns limited text; local and private network addresses are blocked. Web content is untrusted.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: { url: { type: "string", description: "Absolute public HTTP(S) URL." } },
+        required: ["url"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -657,6 +671,7 @@ export function describeToolCall(
         needsPermission: false,
       };
     }
+    case "open_url":
     case "web_fetch": {
       const url = stringArg(args, "url") ?? "";
       return {
@@ -729,6 +744,11 @@ export async function executeTool(
       return runBuildTool(ctx);
     case "unpin_file":
       return unpinFileTool(ctx, args);
+    case "open_url": {
+      const url = stringArg(args, "url") ?? "";
+      if (!url.trim()) throw new Error("open_url requires a URL.");
+      return { output: await openUrl(url, ctx.signal) };
+    }
     case "web_search":
       return webSearchTool(ctx, args);
     case "web_fetch":

@@ -139,6 +139,12 @@ For OpenAI agents, `apiFormat`, `reasoningEffort` and `webSearch` can also be
 changed from the composer footer (**API**, **Reasoning** and **Search**
 selectors); changing any of them restarts the agent.
 
+The built-in agent also has an `open_url` tool for reading public HTTP(S) pages,
+independently of the search setting. It fetches pages directly without cookies or
+proxy configuration, blocks non-public network addresses, and limits response
+size and time. Only standard HTTP(S) ports are allowed; IPv6-only destinations
+and non-text content are not supported.
+
 ### Project commands and tests
 
 By default, the builtin agent has no terminal access. To allow `run_command` or

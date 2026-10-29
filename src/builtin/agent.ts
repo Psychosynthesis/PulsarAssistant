@@ -7,6 +7,7 @@ import {
   type ChatClient,
   type ChatMessage,
   type ChatToolCall,
+  type ResponsesReasoningItem,
 } from "../openai-client";
 import {
   deleteStoredSession,
@@ -239,6 +240,7 @@ function dropToolCallHistory(messages: StoredContextMessage[]): number {
     if (message.role === "assistant" && message.tool_calls?.length) {
       dropped += message.tool_calls.length;
       delete message.tool_calls;
+      delete message.responses_reasoning_items;
       // An assistant turn that only carried tool calls says nothing once they
       // are gone.
       if (!message.content || message.content.trim() === "") {
@@ -365,6 +367,9 @@ function toChatMessages(messages: StoredContextMessage[]): ChatMessage[] {
           ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
           ...(m.reasoning_content !== undefined
             ? { reasoning_content: m.reasoning_content }
+            : {}),
+          ...(m.responses_reasoning_items
+            ? { responses_reasoning_items: m.responses_reasoning_items }
             : {}),
         };
 
@@ -951,6 +956,7 @@ export class BuiltinAgent {
       const assistantMessageId = newId();
       let assistantText = "";
       let assistantReasoning = "";
+      let responsesReasoningItems: ResponsesReasoningItem[] = [];
       let toolCalls: ChatToolCall[] | null = null;
       for await (const event of this.client.complete(
         {
@@ -998,6 +1004,8 @@ export class BuiltinAgent {
             )
             .join(" · ");
           this.conn.onStatusNote?.(`Web search: ${formatted}`);
+        } else if (event.type === "responses_reasoning") {
+          responsesReasoningItems = event.items;
         } else if (event.type === "tool_calls") {
           toolCalls = event.calls;
         }
@@ -1023,6 +1031,9 @@ export class BuiltinAgent {
         content: assistantText || null,
         tool_calls: toolCalls,
         reasoning_content: assistantReasoning || undefined,
+        ...(responsesReasoningItems.length > 0
+          ? { responses_reasoning_items: responsesReasoningItems }
+          : {}),
       });
       for (let index = 0; index < toolCalls.length; index += 1) {
         const call = toolCalls[index];
