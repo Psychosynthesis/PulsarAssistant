@@ -7,9 +7,9 @@ export const STARTUP_TIMEOUT_MS = 30_000;
 export const AUTH_REQUIRED_CODE = -32000;
 
 export const MAX_TOOL_ITERATIONS = 300; // This is default
-export const DEFAULT_TOOL_CALL_DELAY_MS = 500;
-export const PINNED_FILES_LIMIT = 5;
-export const PINNED_FILE_MAX_LINES = 800;
+export const DEFAULT_TOOL_CALL_DELAY_MS = 800;
+export const PINNED_FILES_LIMIT = 6;
+export const PINNED_FILE_MAX_LINES = 2000;
 
 /**
  * Context output compaction interval (in number of tool calls).
