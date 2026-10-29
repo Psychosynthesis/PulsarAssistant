@@ -53,6 +53,46 @@ export function setActiveAgentId(id: string): void {
   atom.config.set(CFG_ACTIVE, id);
 }
 
+function writeAgentField(
+  agentId: string,
+  field: "apiFormat" | "reasoningEffort" | "webSearch",
+  value: unknown,
+): void {
+  const raw = atom.config.get(CFG_AGENTS);
+  const agents: Record<string, unknown> = isObject(raw) ? { ...raw } : {};
+  const entry: Record<string, unknown> = isObject(agents[agentId])
+    ? { ...(agents[agentId] as Record<string, unknown>) }
+    : {};
+  if (value == null) {
+    delete entry[field];
+  } else {
+    entry[field] = value;
+  }
+  agents[agentId] = entry;
+  atom.config.set(CFG_AGENTS, agents);
+}
+
+export function setAgentApiFormat(
+  agentId: string,
+  value: "chat-completions" | "responses" | null,
+): void {
+  writeAgentField(agentId, "apiFormat", value);
+}
+
+export function setAgentReasoningEffort(
+  agentId: string,
+  value: string | null,
+): void {
+  writeAgentField(agentId, "reasoningEffort", value);
+}
+
+export function setAgentWebSearch(
+  agentId: string,
+  value: "off" | "auto" | "native" | "local" | null,
+): void {
+  writeAgentField(agentId, "webSearch", value);
+}
+
 export function readProjectPolicy(projectRoot: string): ProjectPolicy {
   return resolveProjectPolicy(projectRoot, atom.config.get(CFG_PROJECTS));
 }

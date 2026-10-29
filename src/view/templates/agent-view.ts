@@ -25,6 +25,41 @@ export const COMPACT_INTERVAL_CONTROL = `
   </div>
 `;
 
+export const API_FORMAT_CONTROL = `
+  <div class="pulsar-assistant-turn-limit pulsar-assistant-api-format">
+    <label for="pulsar-assistant-api-format-select">API</label>
+    <select id="pulsar-assistant-api-format-select" data-ref="select">
+      <option value="chat-completions">Chat Completions</option>
+      <option value="responses">Responses</option>
+    </select>
+  </div>
+`;
+
+export const REASONING_EFFORT_CONTROL = `
+  <div class="pulsar-assistant-turn-limit pulsar-assistant-reasoning-effort">
+    <label for="pulsar-assistant-reasoning-effort-select">Reasoning</label>
+    <select id="pulsar-assistant-reasoning-effort-select" data-ref="select">
+      <option value="">Auto</option>
+      <option value="none">None</option>
+      <option value="low">Low</option>
+      <option value="medium">Medium</option>
+      <option value="high">High</option>
+    </select>
+  </div>
+`;
+
+export const WEB_SEARCH_CONTROL = `
+  <div class="pulsar-assistant-turn-limit pulsar-assistant-web-search">
+    <label for="pulsar-assistant-web-search-select">Search</label>
+    <select id="pulsar-assistant-web-search-select" data-ref="select">
+      <option value="off">Off</option>
+      <option value="auto">Auto</option>
+      <option value="native">Native</option>
+      <option value="local">Local</option>
+    </select>
+  </div>
+`;
+
 export function slashWrapTemplate(menuId: string): string {
   return `
     <div class="pulsar-assistant-slash-wrap">

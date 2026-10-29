@@ -135,6 +135,10 @@ Optional fields:
   tools, executed client-side.
 - `stream`: `true` to stream responses (parsed as SSE for both API formats).
 
+For OpenAI agents, `apiFormat`, `reasoningEffort` and `webSearch` can also be
+changed from the composer footer (**API**, **Reasoning** and **Search**
+selectors); changing any of them restarts the agent.
+
 ### Project commands and tests
 
 By default, the builtin agent has no terminal access. To allow `run_command` or

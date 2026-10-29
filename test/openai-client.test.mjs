@@ -526,6 +526,34 @@ test("OpenAiChatClient: sends reasoning_effort none for OpenAI reasoning models 
   assert.equal(capturedBody.reasoning_effort, "none");
 });
 
+test("OpenAiChatClient: sends reasoning_effort none for gpt-6.x reasoning models with tools", async () => {
+  let capturedBody = null;
+  const fetchImpl = async (_url, init) => {
+    capturedBody = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+      { status: 200 },
+    );
+  };
+  const client = new OpenAiChatClient({
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "k",
+    stream: false,
+    fetch: fetchImpl,
+  });
+  for await (const _event of client.complete(
+    {
+      model: "gpt-6.1-terra",
+      messages: [],
+      tools: [{ type: "function", function: { name: "read_file", parameters: {} } }],
+    },
+    new AbortController().signal,
+  )) {
+    // drain
+  }
+  assert.equal(capturedBody.reasoning_effort, "none");
+});
+
 test("OpenAiChatClient: does not add reasoning_effort for non-OpenAI providers", async () => {
   let capturedBody = null;
   const fetchImpl = async (_url, init) => {

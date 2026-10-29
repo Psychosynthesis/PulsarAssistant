@@ -334,7 +334,7 @@ function isOpenAiReasoningModel(model: string): boolean {
   if (!normalized) return false;
   return (
     /(^|[-/.])o\d/.test(normalized) ||
-    /(^|[-/.])gpt-5/.test(normalized) ||
+    /(^|[-/.])gpt-[5-9]/.test(normalized) ||
     normalized.includes("reasoning")
   );
 }

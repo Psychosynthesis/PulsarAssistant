@@ -27,6 +27,9 @@ import {
   readAgentsConfig,
   readProjectPolicy,
   setActiveAgentId,
+  setAgentApiFormat,
+  setAgentReasoningEffort,
+  setAgentWebSearch,
   setProjectMaxTurnRequests,
   setProjectBuildCommand,
   setProjectTestCommand,
@@ -81,10 +84,13 @@ import {
   ref,
 } from "./utils";
 import {
+  API_FORMAT_CONTROL,
   COMPACT_INTERVAL_CONTROL,
   CONFIG_SELECTORS,
+  REASONING_EFFORT_CONTROL,
   TOOL_DELAY_CONTROL,
   TURN_LIMIT_CONTROL,
+  WEB_SEARCH_CONTROL,
 } from "./templates/agent-view";
 
 /**
@@ -191,6 +197,9 @@ export class PulsarAssistantView {
   private maxTurnRequestsInput!: HTMLInputElement;
   private toolCallDelayInput!: HTMLInputElement;
   private compactIntervalInput!: HTMLInputElement;
+  private apiFormatSelect!: HTMLSelectElement;
+  private reasoningEffortSelect!: HTMLSelectElement;
+  private webSearchSelect!: HTMLSelectElement;
   private followButton!: HTMLButtonElement;
   private followAgent = false;
   private followTargetPath: string | null = null;
@@ -262,6 +271,9 @@ export class PulsarAssistantView {
   private refreshControls(): void {
     this.renderAgentPicker();
     this.renderModelSelector();
+    this.refreshApiFormatControl();
+    this.refreshReasoningEffortControl();
+    this.refreshWebSearchControl();
     this.updateInputControls();
   }
 
@@ -412,6 +424,9 @@ export class PulsarAssistantView {
     this.refreshTurnLimitInput();
     this.refreshToolDelayInput();
     this.refreshCompactIntervalInput();
+    this.refreshApiFormatControl();
+    this.refreshReasoningEffortControl();
+    this.refreshWebSearchControl();
 
     this.ensureStarted();
   }
@@ -504,6 +519,9 @@ export class PulsarAssistantView {
       this.resetModelState();
     }
     this.renderModelSelector();
+    this.refreshApiFormatControl();
+    this.refreshReasoningEffortControl();
+    this.refreshWebSearchControl();
     this.updateContextProgress();
       this.updateInputControls();
     if (this.infoPanelOpen) this.renderInfoPanel();
@@ -1052,6 +1070,9 @@ export class PulsarAssistantView {
     actions.appendChild(this.buildTurnLimitControl());
     actions.appendChild(this.buildToolDelayControl());
     actions.appendChild(this.buildCompactIntervalControl());
+    actions.appendChild(this.buildApiFormatControl());
+    actions.appendChild(this.buildReasoningEffortControl());
+    actions.appendChild(this.buildWebSearchControl());
     actions.appendChild(this.autoApproveButton);
 
     const actionButtons = createElement("div", { class: "pulsar-assistant-action-buttons" });
@@ -1296,6 +1317,180 @@ export class PulsarAssistantView {
     }
     setProjectToolOutputCompactInterval(this.projectRoot, value);
     this.refreshCompactIntervalInput();
+  }
+
+  private buildApiFormatControl(): HTMLElement {
+    const wrap = elementFromHtml(API_FORMAT_CONTROL);
+    this.apiFormatSelect = ref<HTMLSelectElement>(wrap, "select");
+    this.apiFormatSelect.addEventListener("change", () => {
+      this.applyApiFormat(
+        this.apiFormatSelect.value as "chat-completions" | "responses",
+      );
+    });
+    this.subscriptions.add(
+      atom.tooltips.add(wrap, {
+        title:
+          "API transport for this OpenAI agent. Use Responses for OpenAI reasoning models (o-series / gpt-5+) together with function tools. Changing it restarts the agent.",
+        placement: "top",
+        trigger: "hover",
+      }),
+    );
+    return wrap;
+  }
+
+  private buildReasoningEffortControl(): HTMLElement {
+    const wrap = elementFromHtml(REASONING_EFFORT_CONTROL);
+    this.reasoningEffortSelect = ref<HTMLSelectElement>(wrap, "select");
+    this.reasoningEffortSelect.addEventListener("change", () => {
+      this.applyReasoningEffort(this.reasoningEffortSelect.value);
+    });
+    this.subscriptions.add(
+      atom.tooltips.add(wrap, {
+        title:
+          "Reasoning effort for reasoning models. Auto uses the provider default (or 'none' for Chat Completions with function tools). Changing it restarts the agent.",
+        placement: "top",
+        trigger: "hover",
+      }),
+    );
+    return wrap;
+  }
+
+  private refreshApiFormatControl(): void {
+    if (!this.apiFormatSelect) return;
+    const target = this.activeTarget;
+    const wrap = this.apiFormatSelect.closest(".pulsar-assistant-api-format");
+    if (wrap instanceof HTMLElement) {
+      wrap.style.display = target?.kind === "openai" ? "" : "none";
+    }
+    if (target?.kind === "openai") {
+      this.apiFormatSelect.value = target.apiFormat;
+    }
+  }
+
+  private refreshReasoningEffortControl(): void {
+    if (!this.reasoningEffortSelect) return;
+    const target = this.activeTarget;
+    const wrap = this.reasoningEffortSelect.closest(
+      ".pulsar-assistant-reasoning-effort",
+    );
+    if (wrap instanceof HTMLElement) {
+      wrap.style.display = target?.kind === "openai" ? "" : "none";
+    }
+    if (target?.kind === "openai") {
+      this.reasoningEffortSelect.value = target.reasoningEffort ?? "";
+    }
+  }
+
+  private applyApiFormat(value: "chat-completions" | "responses"): void {
+    const target = this.activeTarget;
+    if (!target || target.kind !== "openai") return;
+    if (target.apiFormat === value) {
+      this.refreshApiFormatControl();
+      return;
+    }
+    setAgentApiFormat(target.id, value);
+    this.relaunchActiveAgent();
+  }
+
+  private applyReasoningEffort(value: string): void {
+    const target = this.activeTarget;
+    if (!target || target.kind !== "openai") return;
+    if ((target.reasoningEffort ?? "") === value) {
+      this.refreshReasoningEffortControl();
+      return;
+    }
+    setAgentReasoningEffort(target.id, value === "" ? null : value);
+    this.relaunchActiveAgent();
+  }
+
+  private buildWebSearchControl(): HTMLElement {
+    const wrap = elementFromHtml(WEB_SEARCH_CONTROL);
+    this.webSearchSelect = ref<HTMLSelectElement>(wrap, "select");
+    this.webSearchSelect.addEventListener("change", () => {
+      this.applyWebSearch(
+        this.webSearchSelect.value as "off" | "auto" | "native" | "local",
+      );
+    });
+    this.subscriptions.add(
+      atom.tooltips.add(wrap, {
+        title:
+          "Web search for this OpenAI agent. Native uses the provider's server-side search (OpenAI Responses); Local uses the DeepSeek Search & Fetch API. Changing it restarts the agent.",
+        placement: "top",
+        trigger: "hover",
+      }),
+    );
+    return wrap;
+  }
+
+  private refreshWebSearchControl(): void {
+    if (!this.webSearchSelect) return;
+    const target = this.activeTarget;
+    const wrap = this.webSearchSelect.closest(".pulsar-assistant-web-search");
+    if (wrap instanceof HTMLElement) {
+      wrap.style.display = target?.kind === "openai" ? "" : "none";
+    }
+    if (target?.kind === "openai") {
+      this.webSearchSelect.value = target.webSearch;
+    }
+  }
+
+  private applyWebSearch(value: "off" | "auto" | "native" | "local"): void {
+    const target = this.activeTarget;
+    if (!target || target.kind !== "openai") return;
+    if (target.webSearch === value) {
+      this.refreshWebSearchControl();
+      return;
+    }
+    setAgentWebSearch(target.id, value);
+    this.relaunchActiveAgent();
+  }
+
+  private relaunchActiveAgent(): void {
+    const config = readAgentsConfig();
+    this.agentsConfig = config;
+    const id = this.selectedAgentId;
+    if (!id) return;
+    const agent = config.agents[id];
+    if (!agent) return;
+
+    let target: LaunchTarget;
+    try {
+      target = toLaunchTarget(id, agent, this.selectedModelId ?? undefined);
+    } catch (error) {
+      this.appendError(errorMessage(error));
+      this.refreshControls();
+      return;
+    }
+
+    const launched = this.session.launchedAgent;
+    const liveSameAgent =
+      launchTargetsEqual(launched, target) &&
+      this.session.sessionId != null &&
+      !this.agentExited;
+    if (liveSameAgent) {
+      this.refreshControls();
+      return;
+    }
+
+    if (this.session.running) {
+      atom.confirm(
+        {
+          type: "warning",
+          message: `Restart ${agent.name}?`,
+          detail:
+            "Changing the API format or reasoning effort restarts the agent and clears this conversation.",
+          buttons: ["Restart", "Cancel"],
+          defaultId: 1,
+        },
+        (response) => {
+          if (response === 0) this.performSwitch(target);
+          else this.refreshControls();
+        },
+      );
+      return;
+    }
+
+    this.performSwitch(target);
   }
 
   private closeAllConfigMenus(): void {

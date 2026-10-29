@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-10-20
+
+- **gpt-6.x reasoning detection**: the Chat Completions stop-gap that sends
+  `reasoning_effort: "none"` for OpenAI reasoning models with function tools
+  now also recognises `gpt-6.x` (and later `gpt-N`), not just gpt-5/o-series.
+- **Composer footer controls**: OpenAI agents gained **API** (Chat Completions
+  / Responses), **Reasoning** (Auto / None / Low / Medium / High) and **Search**
+  (Off / Auto / Native / Local) selectors. Changing any of them persists to the
+  agent config and restarts the agent.
+
 ## [0.9.0] - 2026-10-20
 
 - **Node 14 build target**: the esbuild output is now generated for
