@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-11-17
+
+- **`open_url` JSON support**: the tool now also returns JSON responses
+  (`application/json`, `text/json`, `*+json` and any `text/*` type), so it
+  can read JSON APIs as well as web pages.
+- **Refined tool cards**: the running indicator is now a pure CSS spinner
+  instead of an octicon, the completed green tint is subtler (0.1 alpha), and
+  the cards have a slightly larger border radius with tighter horizontal
+  padding, so they render lower and cleaner.
+- **Host context note**: mentions auto-pinned files and reminds agents to
+  unpin files they no longer need.
+
 ## [0.9.4] - 2026-11-17
 
 - **Fixed `open_url`**: the tool no longer fails with

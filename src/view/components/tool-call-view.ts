@@ -59,9 +59,7 @@ function applyStatus(view: ToolView, status: string | undefined): void {
   view.status.replaceChildren();
   if (state === "in_progress" || state === "pending") {
     view.status.appendChild(
-      createElement("span", {
-        class: ["icon", "icon-sync", "pulsar-assistant-spin"],
-      }),
+      createElement("span", { class: "pulsar-assistant-tool-spinner" }),
     );
   } else if (state === "failed") {
     view.status.appendChild(

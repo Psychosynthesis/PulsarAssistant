@@ -263,13 +263,13 @@
   min-width: 0;
   background: rgba(200, 200, 200, 0.05);
   border: 1px solid @pane-item-border-color;
-  border-radius: @component-border-radius;
-  padding: (@component-padding / 2);
+  border-radius: (@component-border-radius + 1px);
+  padding: (@component-padding / 2) (@component-padding / 3);
   margin-bottom: (@component-padding + 5px);
 
   // Status is signalled by a subtle background tint rather than a text label.
   &[data-status="completed"] {
-    background: rgba(115, 201, 144, 0.12);
+    background: rgba(115, 201, 144, 0.1);
   }
 
   &[data-status="failed"] {
@@ -291,6 +291,17 @@
     align-items: center;
     justify-content: center;
     color: @text-color-subtle;
+    // Keeps the octicon error indicator compact (12px).
+    font-size: 12px;
+
+    .pulsar-assistant-tool-spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: pulsar-assistant-tool-spin 0.8s linear infinite;
+    }
   }
 
   &[data-status="failed"] .pulsar-assistant-tool-status {
@@ -361,6 +372,16 @@
     font-size: 0.9em;
     line-height: 1.5;
     color: @text-color-subtle;
+  }
+}
+
+@keyframes pulsar-assistant-tool-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
   }
 }
 

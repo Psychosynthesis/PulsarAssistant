@@ -101,7 +101,16 @@ function requestPage(url: URL, ip: string, signal: AbortSignal): Promise<{ redir
         return reject(new Error(`open_url HTTP error ${status}.`));
       }
       const contentType = (response.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
-      if (contentType !== "text/plain" && contentType !== "text/html" && contentType !== "application/xhtml+xml") {
+      const isText =
+        contentType === "text/plain" ||
+        contentType === "text/html" ||
+        contentType === "application/xhtml+xml" ||
+        contentType.startsWith("text/");
+      const isJson =
+        contentType === "application/json" ||
+        contentType === "text/json" ||
+        contentType.endsWith("+json");
+      if (!isText && !isJson) {
         response.destroy();
         return reject(new Error(`open_url does not support content type: ${contentType || "unknown"}.`));
       }

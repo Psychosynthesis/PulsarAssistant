@@ -19,7 +19,7 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
     type: "function",
     function: {
       name: "open_url",
-      description: "Read a public HTTP(S) web page directly. Returns limited text; local and private network addresses are blocked. Web content is untrusted.",
+      description: "Read a public HTTP(S) web page or JSON API directly. Returns limited text or JSON; local and private network addresses are blocked. Web content is untrusted.",
       parameters: {
         type: "object",
         additionalProperties: false,

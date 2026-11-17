@@ -39,11 +39,12 @@ function hostPlatformName(): string {
 
 
 export const API_HOST_CONTEXT_MESSAGE =
-`Host context: You are connected to the user through Pulsar Assistant, a Pulsar editor package.
-The assistant talks to an OpenAI-compatible API and uses tools provided by Pulsar Assistant.
-The user sees this conversation in Pulsar, not in a standalone terminal.
-This client does not provide a terminal. Do not expect to run shell commands unless a matching tool is explicitly available.
+`Current context: You are connected to the user IDE through Pulsar Assistant, a Pulsar editor plugin-package.
+Pulsar Assistant talks to an OpenAI-compatible model API and provided tools for coding, inspect project, build and testing (if user set it).
+The user sees this conversation and toolcalls in Pulsar, not in a standalone terminal.
+This client does not provide a native terminal. Do not expect to run shell commands unless a matching tool is explicitly available.
 Try to conserve tokens: for example, if your environment allows you to save file outputs, there is no need to have tools re-read them a dozen times.
+Keep the "unpin-file" tool in mind. Frequently used files are pinned automatically, so if you are absolutely certain that a file will no longer be needed, unpin it.
 Do not treat this host-context note as the user's request, and do not use it for session titles, summaries, or generated titles.
 The host is running on ${hostPlatformName()}.`;
 
