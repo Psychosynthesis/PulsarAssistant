@@ -4,6 +4,7 @@ import { createElement } from "../utils";
 
 export interface PermissionHost {
   openLocation: (path: string, line?: number) => Promise<void>;
+  displayPath?: (path: string) => string;
   renderToolContent: (item: acp.ToolCallContent) => HTMLElement;
   makeButton: (label: string, onClick: () => void) => HTMLButtonElement;
   addTooltipDisposable: (d: Disposable) => void;
@@ -136,7 +137,10 @@ export class PermissionManager {
       for (const loc of toolCall.locations) {
         const link = createElement("button", { class: ["btn-link", "pulsar-assistant-location"] });
         const lineSuffix = loc.line != null ? `:${loc.line}` : "";
-        link.textContent = `${loc.path}${lineSuffix}`;
+        const displayPath = this.host.displayPath
+          ? this.host.displayPath(loc.path)
+          : loc.path;
+        link.textContent = `${displayPath}${lineSuffix}`;
         link.addEventListener("click", () =>
           this.host.openLocation(loc.path, loc.line ?? undefined),
         );

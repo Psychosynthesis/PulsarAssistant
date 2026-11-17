@@ -6,6 +6,7 @@ export interface PinnedFilesStore {
   getPinnedFiles(): string[];
   pinFile(filePath: string): Promise<boolean>;
   unpinFile(filePath: string): Promise<boolean>;
+  recordFileRead(filePath: string): Promise<void>;
 }
 
 export interface BackendInitResult {

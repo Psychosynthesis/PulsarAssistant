@@ -295,8 +295,14 @@ export class BuiltinBackend implements AgentBackend {
         this.emit({ type: "file-written", path: params.destinationPath });
       },
       getPinnedFiles: () => this.pinnedStore?.getPinnedFiles() ?? [],
+      pinFile: async (path: string) => {
+        return (await this.pinnedStore?.pinFile(path)) ?? false;
+      },
       unpinFile: async (path: string) => {
         return (await this.pinnedStore?.unpinFile(path)) ?? false;
+      },
+      recordFileRead: async (path: string) => {
+        await this.pinnedStore?.recordFileRead(path);
       },
       onStatusNote: (note: string) => {
         this.emit({ type: "status-note", text: note });

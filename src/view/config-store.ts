@@ -55,7 +55,7 @@ export function setActiveAgentId(id: string): void {
 
 function writeAgentField(
   agentId: string,
-  field: "apiFormat" | "reasoningEffort" | "webSearch",
+  field: "apiFormat" | "reasoningEffort" | "webSearch" | "includeReasoning",
   value: unknown,
 ): void {
   const raw = atom.config.get(CFG_AGENTS);
@@ -91,6 +91,13 @@ export function setAgentWebSearch(
   value: "off" | "auto" | "native" | "local" | null,
 ): void {
   writeAgentField(agentId, "webSearch", value);
+}
+
+export function setAgentIncludeReasoning(
+  agentId: string,
+  value: boolean | null,
+): void {
+  writeAgentField(agentId, "includeReasoning", value);
 }
 
 export function readProjectPolicy(projectRoot: string): ProjectPolicy {

@@ -267,13 +267,69 @@
   padding: (@component-padding / 2);
   margin-bottom: (@component-padding + 5px);
 
+  // Status is signalled by a subtle background tint rather than a text label.
+  &[data-status="completed"] {
+    background: rgba(115, 201, 144, 0.12);
+  }
+
+  &[data-status="failed"] {
+    background: rgba(240, 100, 100, 0.1);
+  }
+
   .pulsar-assistant-tool-heading {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     min-width: 0;
-    gap: 8px;
+    gap: 6px;
     margin-bottom: 2px;
+  }
+
+  .pulsar-assistant-tool-status {
+    flex: 0 0 16px;
+    width: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: @text-color-subtle;
+  }
+
+  &[data-status="failed"] .pulsar-assistant-tool-status {
+    color: @text-color-error;
+  }
+
+  &[data-status="in_progress"] .pulsar-assistant-tool-status,
+  &[data-status="pending"] .pulsar-assistant-tool-status {
+    color: @text-color-info;
+  }
+
+  .pulsar-assistant-tool-chevron {
+    flex: 0 0 auto;
+    appearance: none;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    width: 12px;
+    text-align: center;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 1.1em;
+    line-height: 1;
+    color: @text-color-subtle;
+    transition: transform 0.15s ease, color 0.15s ease;
+
+    &:hover,
+    &:focus-visible {
+      color: @text-color-highlight;
+    }
+
+    &:focus {
+      outline: none;
+    }
+
+    &.expanded {
+      transform: rotate(90deg);
+    }
   }
 
   .pulsar-assistant-tool-title {
@@ -285,27 +341,13 @@
     white-space: nowrap;
   }
 
-  .pulsar-assistant-tool-heading--link .pulsar-assistant-tool-title {
-    cursor: pointer;
-
-    &:hover {
-      text-decoration: underline;
-    }
-  }
-
-  .pulsar-assistant-tool-status {
-    flex: 0 0 auto;
-    margin-left: auto;
-    font-size: 0.85em;
-    text-transform: capitalize;
-  }
-
-  &[data-status="failed"] .pulsar-assistant-tool-status {
-    color: @text-color-error;
-  }
-
-  &[data-status="completed"] .pulsar-assistant-tool-status {
-    color: @text-color-success;
+  .pulsar-assistant-tool-details {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .pulsar-assistant-tool-body {
@@ -319,47 +361,6 @@
     font-size: 0.9em;
     line-height: 1.5;
     color: @text-color-subtle;
-  }
-
-  .pulsar-assistant-tool-body--collapsed {
-    overflow: hidden;
-  }
-
-  .pulsar-assistant-tool-body--collapsed-text {
-    max-height: 4.5em;
-  }
-
-  .pulsar-assistant-tool-body--collapsed-diff {
-    max-height: 30em;
-  }
-
-  .pulsar-assistant-tool-body--expanded {
-    max-height: none;
-  }
-
-  .pulsar-assistant-tool-summary {
-    padding: 0 (@component-padding / 2);
-    margin-top: 2px;
-    color: @text-color-subtle;
-    font-size: 0.82em;
-    font-style: italic;
-    overflow-wrap: anywhere;
-  }
-
-  .pulsar-assistant-tool-toggle {
-    margin-top: 4px;
-    margin-left: (@component-padding / 2);
-    padding: 0;
-    border: none;
-    background: none;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 0.9em;
-    color: @text-color-info;
-
-    &:hover {
-      text-decoration: underline;
-    }
   }
 }
 

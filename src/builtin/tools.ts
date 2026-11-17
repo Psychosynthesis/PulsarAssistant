@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import * as path from "path";
 import * as acp from "@agentclientprotocol/sdk";
 import { parseCommandLine, runCapturedProcess } from "../util";
@@ -141,6 +142,26 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
           },
         },
         required: ["sourcePath", "destinationPath"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_file",
+      description:
+        "Delete a file by moving it into the `.toRemove` directory at the project root. This is the agreed-upon way to delete files in this environment: the file is not permanently erased and can be restored or cleared later. Takes a single file path.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          path: {
+            type: "string",
+            description:
+              "Absolute or project-relative path of the file to delete.",
+          },
+        },
+        required: ["path"],
       },
     },
   },
@@ -337,6 +358,26 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "pin_file",
+      description:
+        "Add a file to the pinned context. Pinned files are re-injected into your context on every turn until unpinned, so pin files you will reference repeatedly across turns.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          path: {
+            type: "string",
+            description:
+              "Project-relative or absolute path of the file to pin.",
+          },
+        },
+        required: ["path"],
+      },
+    },
+  },
 ];
 
 export const WEB_SEARCH_TOOL: ChatTool = {
@@ -407,7 +448,9 @@ export type BuiltinHost = {
     destinationPath: string;
   }): Promise<void>;
   getPinnedFiles?: () => string[];
+  pinFile?: (path: string) => Promise<boolean>;
   unpinFile?: (path: string) => Promise<boolean>;
+  recordFileRead?: (path: string) => Promise<void>;
   onStatusNote?: (note: string) => void;
   onThought?: (thought: string) => void;
 };
@@ -554,6 +597,17 @@ export function describeToolCall(
         needsPermission: true,
       };
     }
+    case "delete_file": {
+      const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
+      assertWritablePath(cwd, filePath);
+      return {
+        title: `Delete ${path.basename(filePath)}`,
+        kind: "edit",
+        locations: [{ path: filePath }],
+        rawInput: { path: filePath },
+        needsPermission: true,
+      };
+    }
     case "find_files": {
       const pattern = stringArg(args, "pattern") ?? "*";
       const extensions = Array.isArray(args.extensions)
@@ -662,6 +716,16 @@ export function describeToolCall(
         needsPermission: false,
       };
     }
+    case "pin_file": {
+      const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
+      return {
+        title: `Pin ${path.basename(filePath)}`,
+        kind: "edit",
+        locations: [{ path: filePath }],
+        rawInput: { path: filePath },
+        needsPermission: false,
+      };
+    }
     case "web_search": {
       const query = stringArg(args, "query") ?? "";
       return {
@@ -726,6 +790,8 @@ export async function executeTool(
       return writeDiffTool(ctx, args);
     case "move_file":
       return moveFileTool(ctx, args);
+    case "delete_file":
+      return deleteFileTool(ctx, args);
     case "find_files":
       return findFilesTool(ctx, args);
     case "get_file_structure":
@@ -744,6 +810,8 @@ export async function executeTool(
       return runBuildTool(ctx);
     case "unpin_file":
       return unpinFileTool(ctx, args);
+    case "pin_file":
+      return pinFileTool(ctx, args);
     case "open_url": {
       const url = stringArg(args, "url") ?? "";
       if (!url.trim()) throw new Error("open_url requires a URL.");
@@ -805,6 +873,26 @@ async function unpinFileTool(
   }
   return {
     output: `File "${path.basename(filePath)}" successfully unpinned from context.`,
+  };
+}
+
+async function pinFileTool(
+  ctx: ToolExecutionContext,
+  args: Record<string, unknown>,
+): Promise<ToolSuccess> {
+  const rawPath = normalizeInputPath(stringArg(args, "path") ?? "");
+  const filePath = resolveToolPath(ctx, rawPath);
+  if (!ctx.host.pinFile) {
+    throw new Error("Pinned files are not supported by this backend.");
+  }
+  const pinned = await ctx.host.pinFile(filePath);
+  if (!pinned) {
+    return {
+      output: `File "${path.basename(filePath)}" is already pinned, nothing changed.`,
+    };
+  }
+  return {
+    output: `File "${path.basename(filePath)}" pinned to context.`,
   };
 }
 
@@ -1015,6 +1103,60 @@ async function moveFileTool(
     destinationPath,
   });
   return { output: `Moved ${sourcePath} -> ${destinationPath}` };
+}
+
+async function uniqueTrashDestination(
+  trashDir: string,
+  relPath: string,
+): Promise<string> {
+  const base = path.join(trashDir, relPath);
+  const ext = path.extname(base);
+  const stem = base.slice(0, base.length - ext.length);
+  let candidate = base;
+  for (let counter = 1; ; counter++) {
+    try {
+      await fs.promises.access(candidate);
+      candidate = `${stem}-${counter}${ext}`;
+    } catch {
+      return candidate;
+    }
+  }
+}
+
+async function deleteFileTool(
+  ctx: ToolExecutionContext,
+  args: Record<string, unknown>,
+): Promise<ToolSuccess> {
+  const sourcePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
+  assertWritablePath(ctx.cwd, sourcePath);
+
+  const relPath = path.relative(ctx.cwd, sourcePath);
+  if (relPath === ".toRemove" || relPath.startsWith(`.toRemove${path.sep}`)) {
+    throw new Error(
+      "Cannot delete files already inside the .toRemove trash directory.",
+    );
+  }
+
+  const sourceStat = await fs.promises.stat(sourcePath).catch(() => null);
+  if (!sourceStat) {
+    throw new Error(`File does not exist: ${sourcePath}`);
+  }
+  if (sourceStat.isDirectory()) {
+    throw new Error(
+      `delete_file only removes files, not directories: ${sourcePath}`,
+    );
+  }
+
+  const trashDir = path.join(ctx.cwd, ".toRemove");
+  const destinationPath = await uniqueTrashDestination(trashDir, relPath);
+  await ctx.host.moveTextFile({
+    sessionId: ctx.sessionId,
+    sourcePath,
+    destinationPath,
+  });
+  return {
+    output: `Moved ${sourcePath} to ${destinationPath} (.toRemove trash).`,
+  };
 }
 
 async function findFilesTool(

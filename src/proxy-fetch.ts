@@ -2,7 +2,6 @@ import * as http from "http";
 import * as https from "https";
 import * as net from "net";
 import * as tls from "tls";
-import type { Duplex } from "stream";
 
 /**
  * Optional HTTP(S) proxy transport for API requests.
@@ -231,100 +230,128 @@ function abortWhen(
 }
 
 /**
- * Opens a proxy tunnel for an HTTPS destination using Node's native CONNECT
- * support (`http.request`/`https.request` with method `CONNECT` and the
- * `connect` event), rather than hand-writing the CONNECT exchange.
+ * Opens a proxy tunnel for an HTTPS destination with a hand-written CONNECT
+ * exchange. Both plain-HTTP and TLS (`https://`) proxies are handled the same
+ * way: for an https:// proxy the connection to the proxy is wrapped in TLS
+ * first, then the CONNECT request is written and its response parsed manually.
+ * This avoids the quirks of `https.request` with `method: "CONNECT"`, which
+ * does not reliably hand the tunnelled socket back to the caller.
  */
 function openTunnel(
   proxy: ProxyConfig,
   authority: string,
   signal: AbortSignal | undefined,
 ): Promise<net.Socket> {
-  const transport = proxy.protocol === "https:" ? https : http;
   const auth = proxyAuthorizationHeader(proxy);
 
   return new Promise<net.Socket>((resolve, reject) => {
     let settled = false;
     let removeAbort: (() => void) | null = null;
-
-    const nodeReq = transport.request({
-      hostname: stripBrackets(proxy.host),
-      port: proxy.port,
-      method: "CONNECT",
-      path: authority,
-      headers: {
-        host: authority,
-        ...(auth ? { "proxy-authorization": auth } : {}),
-      },
-      agent: false,
-      setHost: false,
-    });
+    const rawSocket = net.connect({ host: proxy.host, port: proxy.port });
+    let tunnelSocket: net.Socket | null = null;
 
     const cleanup = () => {
       clearTimeout(timeout);
       removeAbort?.();
-      nodeReq.removeListener("connect", onConnect);
-      nodeReq.removeListener("error", onError);
-      nodeReq.removeListener("close", onClose);
+      rawSocket.removeListener("error", onError);
+      tunnelSocket?.removeListener("error", onError);
     };
-    const finish = (err: Error | null, socket?: net.Socket) => {
+
+    const onError = (err: Error) => {
       if (settled) return;
       settled = true;
       cleanup();
-      if (err) reject(err);
-      else resolve(socket as net.Socket);
+      rawSocket.destroy();
+      tunnelSocket?.destroy();
+      reject(err);
     };
 
-    const onConnect = (
-      res: http.IncomingMessage,
-      socket: Duplex,
-      head: Buffer,
-    ) => {
-      const code = res.statusCode ?? 0;
-      if (code !== 200) {
-        socket.destroy();
+    const finish = (socket: net.Socket) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(socket);
+    };
+
+    const onProxyTlsError = (err: Error) => {
+      onError(
+        new Error(
+          `${err.message} The https:// proxy refused the TLS handshake; if it is a plain HTTP proxy, use http:// instead.`,
+        ),
+      );
+    };
+
+    const sendConnect = (socket: net.Socket) => {
+      const request = [
+        `CONNECT ${authority} HTTP/1.1`,
+        `Host: ${authority}`,
+        ...(auth ? [`Proxy-Authorization: ${auth}`] : []),
+        "",
+        "",
+      ].join("\r\n");
+
+      let buffer = "";
+      const onData = (chunk: Buffer) => {
+        buffer += chunk.toString("latin1");
+        const headerEnd = buffer.indexOf("\r\n\r\n");
+        if (headerEnd === -1) return;
+        socket.removeListener("data", onData);
+        const head = buffer.slice(0, headerEnd);
+        const rest = buffer.slice(headerEnd + 4);
+        const statusLine = head.split("\r\n")[0] ?? "";
+        const match = /^HTTP\/\d(?:\.\d)?\s+(\d{3})/.exec(statusLine);
+        const code = match ? Number(match[1]) : 0;
         if (code === 407) {
-          finish(
+          onError(
             new Error(
               `Proxy authentication required (407) by ${proxy.host}:${proxy.port}. Check the proxy username and password.`,
             ),
           );
-        } else {
-          finish(
-            new Error(
-              `Proxy CONNECT failed: HTTP ${code} ${res.statusMessage ?? ""}`.trim(),
-            ),
-          );
+          return;
         }
-        return;
-      }
-      // `head` holds any bytes already read after the CONNECT headers.
-      if (head && head.length > 0) socket.unshift(head);
-      finish(null, socket as net.Socket);
+        if (code !== 200) {
+          onError(
+            new Error(`Proxy CONNECT failed: HTTP ${code} ${statusLine}`.trim()),
+          );
+          return;
+        }
+        // `rest` holds any bytes already read after the CONNECT headers.
+        if (rest.length > 0) socket.unshift(Buffer.from(rest, "latin1"));
+        finish(socket);
+      };
+
+      socket.on("data", onData);
+      socket.write(request);
     };
-    const onError = (err: Error) => finish(err);
-    const onClose = () =>
-      finish(
-        new Error(
-          `Proxy connection closed before CONNECT completed (${proxy.host}:${proxy.port}).`,
-        ),
-      );
+
+    rawSocket.on("error", onError);
+    rawSocket.once("connect", () => {
+      if (proxy.protocol === "https:") {
+        const tlsSocket = tls.connect({
+          socket: rawSocket,
+          servername: proxy.host,
+          rejectUnauthorized: true,
+        });
+        tunnelSocket = tlsSocket;
+        tlsSocket.on("error", onProxyTlsError);
+        tlsSocket.once("secureConnect", () => sendConnect(tlsSocket));
+      } else {
+        tunnelSocket = rawSocket;
+        sendConnect(rawSocket);
+      }
+    });
 
     const timeout = setTimeout(() => {
-      nodeReq.destroy(
+      onError(
         new Error(
           `Timed out establishing the proxy tunnel via ${proxy.host}:${proxy.port}.`,
         ),
       );
     }, TUNNEL_TIMEOUT_MS);
 
-    nodeReq.on("connect", onConnect);
-    nodeReq.once("error", onError);
-    nodeReq.once("close", onClose);
     removeAbort = abortWhen(signal, () => {
-      nodeReq.destroy(new Error("Aborted"));
+      onError(new Error("Aborted"));
     });
-    if (!signal?.aborted) nodeReq.end();
   });
 }
 

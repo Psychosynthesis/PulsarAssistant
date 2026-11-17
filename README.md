@@ -132,12 +132,19 @@ Optional fields:
 - `webSearch`: `"off" | "auto" | "native" | "local"`. `auto` prefers the
   provider's native search (OpenAI Responses) and otherwise a local backend
   (DeepSeek Search & Fetch API). `local` exposes the `web_search`/`web_fetch`
-  tools, executed client-side.
+  tools, executed client-side. `native` uses the provider's server-side search
+  and is only offered for `apiFormat: "responses"`; the footer hides it for
+  other providers.
+- `includeReasoning`: `true` (default) to ask the provider to stream its
+  reasoning (`include_reasoning`). Toggle off for providers that reject the
+  flag. This is per agent; the global **Thoughts** checkbox only controls
+  whether reasoning is shown in the composer status line.
 - `stream`: `true` to stream responses (parsed as SSE for both API formats).
 
-For OpenAI agents, `apiFormat`, `reasoningEffort` and `webSearch` can also be
-changed from the composer footer (**API**, **Reasoning** and **Search**
-selectors); changing any of them restarts the agent.
+For OpenAI agents, `apiFormat`, `reasoningEffort`, `webSearch` and
+`includeReasoning` can also be changed from the composer footer (**API**,
+**Reasoning** and **Search** selectors plus the **Ask reasoning** checkbox);
+changing any of them restarts the agent.
 
 The built-in agent also has an `open_url` tool for reading public HTTP(S) pages,
 independently of the search setting. It fetches pages directly without cookies or
@@ -158,6 +165,7 @@ By default, the builtin agent has no terminal access. To allow `run_command` or
         allowCommands: true      # enables run_command
         testCommand: "npm test"  # exact test command run by run_tests
         maxTurnRequests: 200     # optional; maximum tool calls in one turn (default: 300, max: 1000)
+        autoPinThreshold: 3      # optional; auto-pin a file after this many read_file calls
 ```
 
 `allowCommands` is a boolean. `testCommand` is the exact command line
@@ -165,6 +173,11 @@ By default, the builtin agent has no terminal access. To allow `run_command` or
 (up to 1000) overriding the default maximum number of tool calls in one turn (300).
 Keys are absolute project roots. The **Tool turns** input in the panel edits
 `maxTurnRequests` for the current project.
+
+`autoPinThreshold` is a positive integer: once the agent has called `read_file`
+on a file that many times, the file is pinned automatically. Read counts are
+kept per file in the project's `tree.json`; manually pinned files are permanent
+and are never evicted automatically.
 
 ### HTTP(S) proxy
 
@@ -179,13 +192,13 @@ To route all API requests through a proxy, set the global package setting
 
 `http://` and `https://` proxies are supported, with optional credentials in the
 URL. Leave the value empty for a direct connection. HTTPS destinations are
-tunnelled with `CONNECT`; plain-HTTP destinations are sent in absolute-form to
-the proxy.
+tunnelled with a hand-written `CONNECT` exchange; plain-HTTP destinations are
+sent in absolute-form to the proxy.
 
-Use `https://` only when the proxy itself speaks TLS on its port. Most browser
-proxies are plain HTTP proxies that merely tunnel HTTPS destinations via
-`CONNECT`; for those, use `http://` in the URL. If an `https://` proxy closes
-the connection during the TLS handshake, the error now suggests switching to
+Use `https://` when the proxy itself speaks TLS on its port, and `http://` when
+it is a plain HTTP proxy that merely tunnels HTTPS destinations via `CONNECT`
+(most browser proxies). Both variants are handled by the same `CONNECT` path; if
+an `https://` proxy refuses the TLS handshake the error now suggests trying
 `http://`. Connections, TLS handshakes and `CONNECT` responses are bounded by
 timeouts, and proxy credentials are redacted from diagnostics.
 
@@ -258,6 +271,28 @@ The bar turns yellow above 70% and red above 90%.
 ### Compacting conversation context
 
 To save tokens on long multi-turn conversations, click the **Compact conversation context** button (`icon-fold`) in the header right controls. This replaces bulky historical outputs from previous tool invocations (`read_file`, `list_dir`, `find_files`, `get_file_structure`, `git`, `write_file`, etc.) with compact summaries, immediately reducing context window consumption for follow-up prompts.
+
+### Pinned files
+
+Pin files to keep them injected into the agent's context on every turn. The
+**pin** button on a `read_file` tool card pins that file; the pinned files list
+in the footer shows what is pinned and lets you unpin. The agent can also pin
+and unpin files itself with the `pin_file` and `unpin_file` tools.
+
+Pinned files are tracked per project in `pinned.json` and stored separately from
+manual pins: files pinned by hand or by the model are permanent, while files
+pinned by `autoPinThreshold` are treated as automatically managed and can be
+evicted when the pin list fills up. When a new file qualifies for auto-pinning,
+the least-read auto-pinned file is dropped first, so the most frequently read
+files stay pinned and stale ones gradually fall away.
+
+### Deleting files
+
+The agent never deletes files permanently. Instead, its `delete_file` tool moves
+a file into a `.toRemove` folder at the project root — the agreed-upon soft
+deletion for this environment. `.toRemove` is excluded from the file index and
+search. The trash button (`icon-trashcan`) next to the settings gear in the
+header empties `.toRemove` for the current project after confirmation.
 
 ### Working with sessions
 

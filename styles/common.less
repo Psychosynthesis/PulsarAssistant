@@ -131,7 +131,7 @@
   margin: 0;
   color: @text-color-info;
   font-family: inherit;
-  font-size: inherit;
+  font-size: 95%;
   text-align: left;
   cursor: pointer;
   text-decoration: none;
@@ -145,6 +145,16 @@
   &:focus {
     outline: none;
   }
+}
+
+// Location link inside compact tool cards: single line with ellipsis so the
+// heading never wraps to a second row.
+.pulsar-assistant-tool-location {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 // Raw code/diff blocks reused across chat tools and permission cards.

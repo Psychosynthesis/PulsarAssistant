@@ -13,6 +13,8 @@ export type ProjectPolicy = {
   maxTurnRequests: number | null;
   toolCallDelayMs: number | null;
   toolOutputCompactInterval: number | null;
+  /** Auto-pin a file after this many read_file calls (0/null disables). */
+  autoPinThreshold: number | null;
 };
 
 const DENY: ProjectPolicy = {
@@ -22,6 +24,7 @@ const DENY: ProjectPolicy = {
   maxTurnRequests: null,
   toolCallDelayMs: null,
   toolOutputCompactInterval: null,
+  autoPinThreshold: null,
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -73,6 +76,7 @@ export function resolveProjectPolicy(
       maxTurnRequests: positiveInt(value.maxTurnRequests),
       toolCallDelayMs: positiveInt(value.toolCallDelayMs),
       toolOutputCompactInterval: nonNegativeInt(value.toolOutputCompactInterval),
+      autoPinThreshold: positiveInt(value.autoPinThreshold),
     };
   }
   return DENY;

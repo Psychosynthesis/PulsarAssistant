@@ -140,7 +140,18 @@ export class AgentSettingsView {
     if (target) {
       this.apiFormat.value = target.apiFormat;
       this.reasoningEffort.value = target.reasoningEffort ?? "";
-      this.webSearch.value = target.webSearch;
+      const nativeAvailable = target.apiFormat === "responses";
+      const nativeOption = this.webSearch.querySelector(
+        'option[value="native"]',
+      ) as HTMLOptionElement | null;
+      if (nativeOption) {
+        nativeOption.hidden = !nativeAvailable;
+        nativeOption.disabled = !nativeAvailable;
+      }
+      this.webSearch.value =
+        nativeAvailable || target.webSearch !== "native"
+          ? target.webSearch
+          : "off";
     }
   }
 

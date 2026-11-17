@@ -1,7 +1,7 @@
 {
   "name": "pulsar-assistant",
   "main": "./lib/main.js",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Coding agent for Pulsar",
   "keywords": [ "acp", "agent", "ai", "assistant", "chatgpt", "gpt", "llm" ],
   "author": "Nick G.",
@@ -73,7 +73,7 @@
       "default": true,
       "order": 1,
       "title": "Show thoughts",
-      "description": "Show model reasoning summaries in the composer status line. For providers that only stream reasoning when asked (e.g. Gemini), this also requests it. For OpenAI Responses it controls the reasoning summary. Disable it to hide thoughts and avoid requesting them where possible."
+      "description": "Show model reasoning summaries in the composer status line. Requesting reasoning from the model is configured per agent via its includeReasoning option."
     },
     "proxyUrl": {
       "type": "string",

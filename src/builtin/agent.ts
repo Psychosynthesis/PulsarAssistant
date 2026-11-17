@@ -27,6 +27,7 @@ import {
   WEB_SEARCH_TOOL,
   type BuiltinHost,
   type ToolExecutionContext,
+  type ToolMeta,
 } from "./tools";
 import { deepseekFetch, deepseekSearch } from "../web-search";
 import { contentBlocksToText } from "../session/prompt-text";
@@ -399,12 +400,13 @@ export class BuiltinAgent {
     private readonly getPolicy: () => ProjectPolicy,
     private readonly storageDir?: string,
     private readonly getFileTree?: () => ProjectFileTree,
-    getIncludeReasoning?: () => boolean,
+    getShowThoughts?: () => boolean,
     fetchImpl?: typeof fetch,
   ) {
     this.target = target;
     this.fetchImpl = fetchImpl;
-    this.getShowThoughts = getIncludeReasoning ?? (() => true);
+    this.getShowThoughts = getShowThoughts ?? (() => true);
+    const includeReasoning = () => this.target.includeReasoning !== false;
     const baseClientOptions = {
       baseUrl: target.baseUrl,
       apiKey: target.apiKey,
@@ -414,12 +416,12 @@ export class BuiltinAgent {
     if (target.apiFormat === "responses") {
       this.client = new OpenAiResponsesClient({
         ...baseClientOptions,
-        includeReasoning: this.getShowThoughts,
+        includeReasoning,
       });
     } else {
       this.client = new OpenAiChatClient({
         ...baseClientOptions,
-        includeReasoning: this.getShowThoughts,
+        includeReasoning,
       });
     }
   }
@@ -1143,7 +1145,7 @@ export class BuiltinAgent {
           }
         : {}),
     };
-    let meta;
+    let meta: ToolMeta;
     try {
       meta = describeToolCall(call.function.name, call.function.arguments, toolCtx);
     } catch (error) {
@@ -1262,6 +1264,9 @@ export class BuiltinAgent {
           toolMessage,
           grepResultSummary(result.output),
         );
+      }
+      if (call.function.name === "read_file" && meta.locations?.[0]?.path) {
+        await this.conn.recordFileRead?.(meta.locations[0].path);
       }
       session.messages.push(toolMessage);
     } catch (error) {

@@ -10,8 +10,10 @@ import {
   deleteStoredSession,
   loadPinnedFiles,
   savePinnedFiles,
+  type PinnedFileEntry,
 } from "../session-storage";
 import type { StoredContextMessage } from "../session-storage";
+import { CFG_PROJECTS, resolveProjectPolicy } from "../project-policy";
 import {
   listProjectSessions as listStoredProjectSessions,
   mergeProjectSessions,
@@ -50,7 +52,7 @@ export class AgentSession {
   private launchTarget: LaunchTarget | null = null;
   private startedTarget: LaunchTarget | null = null;
   private sessionListGeneration = 0;
-  private pinnedFiles: string[] = [];
+  private pinnedFiles: PinnedFileEntry[] = [];
   private readonly pinnedReady: Promise<void>;
 
   constructor(
@@ -69,7 +71,7 @@ export class AgentSession {
     );
     this.pinnedReady = loadPinnedFiles(this.fileTreeManager.getStorageDir())
       .then((files) => {
-        this.pinnedFiles = files.filter((f) => typeof f === "string");
+        this.pinnedFiles = files;
         if (this.pinnedFiles.length > 0) {
           this.emit({
             type: "pinned-files-changed",
@@ -84,7 +86,7 @@ export class AgentSession {
   }
 
   getPinnedFiles(): string[] {
-    return [...this.pinnedFiles];
+    return this.pinnedFiles.map((entry) => entry.path);
   }
 
   private async persistPinnedFiles(): Promise<void> {
@@ -101,13 +103,27 @@ export class AgentSession {
   async pinFile(filePath: string): Promise<boolean> {
     await this.pinnedReady;
     const rel = toProjectRelativePath(this.projectRoot, filePath);
-    if (this.pinnedFiles.includes(rel)) return false;
-    if (this.pinnedFiles.length >= PINNED_FILES_LIMIT) {
-      throw new Error(
-        `Cannot pin more than ${PINNED_FILES_LIMIT} files to context.`,
-      );
+    const existing = this.pinnedFiles.find((entry) => entry.path === rel);
+    if (existing) {
+      // An explicit pin (user or model) upgrades an auto-pin to permanent.
+      if (!existing.manual) {
+        existing.manual = true;
+        await this.persistPinnedFiles();
+        this.emit({ type: "pinned-files-changed", files: this.getPinnedFiles() });
+        return true;
+      }
+      return false;
     }
-    this.pinnedFiles.push(rel);
+    if (this.pinnedFiles.length >= PINNED_FILES_LIMIT) {
+      // Make room by evicting the least-read auto-pin. Manual pins are
+      // permanent and never evicted by the automatic pin system.
+      if (!this.evictLeastReadAutoPin()) {
+        throw new Error(
+          `Cannot pin more than ${PINNED_FILES_LIMIT} files to context.`,
+        );
+      }
+    }
+    this.pinnedFiles.push({ path: rel, manual: true });
     await this.persistPinnedFiles();
     this.emit({ type: "pinned-files-changed", files: this.getPinnedFiles() });
     return true;
@@ -116,12 +132,85 @@ export class AgentSession {
   async unpinFile(filePath: string): Promise<boolean> {
     await this.pinnedReady;
     const rel = toProjectRelativePath(this.projectRoot, filePath);
-    const index = this.pinnedFiles.indexOf(rel);
+    const index = this.pinnedFiles.findIndex((entry) => entry.path === rel);
     if (index === -1) return false;
     this.pinnedFiles.splice(index, 1);
     await this.persistPinnedFiles();
     this.emit({ type: "pinned-files-changed", files: this.getPinnedFiles() });
     return true;
+  }
+
+  /**
+   * Records a read_file call against file statistics and auto-pins the file
+   * once it crosses the project's `autoPinThreshold`. Auto-pinned files bubble
+   * up by read count: when the pin limit is reached, the least-read auto-pin
+   * is evicted first, while manual pins stay put.
+   */
+  async recordFileRead(filePath: string): Promise<void> {
+    await this.pinnedReady;
+    let rel: string;
+    try {
+      rel = toProjectRelativePath(this.projectRoot, filePath);
+    } catch {
+      return;
+    }
+    const count = await this.fileTreeManager.recordFileRead(filePath);
+    if (count <= 0) return;
+    const threshold = this.autoPinThreshold();
+    if (threshold == null || threshold < 1 || count < threshold) return;
+    if (this.pinnedFiles.some((entry) => entry.path === rel)) return;
+    await this.autoPinFile(rel, count);
+  }
+
+  private autoPinThreshold(): number | null {
+    return resolveProjectPolicy(
+      this.projectRoot,
+      this.editor.getProjectConfig(CFG_PROJECTS),
+    ).autoPinThreshold;
+  }
+
+  private readCountOf(relPath: string): number {
+    return this.fileTreeManager.getFileTree().getReadCount(relPath);
+  }
+
+  private leastReadAutoPin(): PinnedFileEntry | null {
+    let victim: PinnedFileEntry | null = null;
+    let victimCount = Number.POSITIVE_INFINITY;
+    for (const entry of this.pinnedFiles) {
+      if (entry.manual) continue;
+      const count = this.readCountOf(entry.path);
+      if (count < victimCount) {
+        victim = entry;
+        victimCount = count;
+      }
+    }
+    return victim;
+  }
+
+  private removePinnedEntry(relPath: string): boolean {
+    const index = this.pinnedFiles.findIndex((entry) => entry.path === relPath);
+    if (index === -1) return false;
+    this.pinnedFiles.splice(index, 1);
+    return true;
+  }
+
+  private evictLeastReadAutoPin(): boolean {
+    const victim = this.leastReadAutoPin();
+    if (!victim) return false;
+    return this.removePinnedEntry(victim.path);
+  }
+
+  private async autoPinFile(relPath: string, readCount: number): Promise<void> {
+    if (this.pinnedFiles.length >= PINNED_FILES_LIMIT) {
+      const victim = this.leastReadAutoPin();
+      if (!victim) return;
+      // Only replace the least-read auto-pin when the new file is read more.
+      if (this.readCountOf(victim.path) >= readCount) return;
+      this.removePinnedEntry(victim.path);
+    }
+    this.pinnedFiles.push({ path: relPath, manual: false });
+    await this.persistPinnedFiles();
+    this.emit({ type: "pinned-files-changed", files: this.getPinnedFiles() });
   }
 
   get sessionId(): string | null {

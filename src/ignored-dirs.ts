@@ -27,6 +27,8 @@ export const DEFAULT_IGNORED_DIRS: readonly string[] = [
   // Test coverage & reports
   "coverage",
   ".nyc_output",
+  // Soft-delete trash
+  ".toRemove",
   // Python environments & caches
   ".venv",
   "venv",

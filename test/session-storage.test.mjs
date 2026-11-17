@@ -157,9 +157,24 @@ test("savePinnedFiles/loadPinnedFiles: round-trips pinned file list", async () =
     const initial = await loadPinnedFiles(tmpDir);
     assert.deepEqual(initial, []);
 
-    await savePinnedFiles(tmpDir, ["src/server.js", "src/types.ts"]);
+    await savePinnedFiles(tmpDir, [
+      { path: "src/server.js", manual: true },
+      { path: "src/types.ts", manual: false },
+    ]);
     const loaded = await loadPinnedFiles(tmpDir);
-    assert.deepEqual(loaded, ["src/server.js", "src/types.ts"]);
+    assert.deepEqual(loaded, [
+      { path: "src/server.js", manual: true },
+      { path: "src/types.ts", manual: false },
+    ]);
+
+    // Legacy format (bare paths) is still readable and treated as manual pins.
+    fs.writeFileSync(
+      path.join(tmpDir, "pinned.json"),
+      JSON.stringify(["src/legacy.js"]),
+      "utf8",
+    );
+    const legacy = await loadPinnedFiles(tmpDir);
+    assert.deepEqual(legacy, [{ path: "src/legacy.js", manual: true }]);
 
     // Corrupt file falls back to empty list.
     fs.writeFileSync(path.join(tmpDir, "pinned.json"), "{not json", "utf8");

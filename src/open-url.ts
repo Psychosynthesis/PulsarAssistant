@@ -25,6 +25,10 @@ export function isPublicAddress(address: string): boolean {
   return true;
 }
 
+function stripBrackets(hostname: string): string {
+  return hostname.replace(/^\[|\]$/g, "");
+}
+
 function parseUrl(raw: string): URL {
   let url: URL;
   try {
@@ -39,35 +43,52 @@ function parseUrl(raw: string): URL {
   if (url.port) {
     throw new Error("open_url only supports standard HTTP and HTTPS ports.");
   }
-  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  const hostname = stripBrackets(url.hostname);
   if (net.isIP(hostname) && !isPublicAddress(hostname)) {
     throw new Error("open_url cannot access local, private or non-public network addresses.");
   }
   return url;
 }
 
-function lookupPublic(hostname: string, options: unknown, callback: (...args: any[]) => void): void {
-  dns.lookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
-    if (error) return callback(error);
-    const ipv4 = addresses.filter((entry) => entry.family === 4);
-    if (!ipv4.length || ipv4.some((entry) => !isPublicAddress(entry.address))) {
-      return callback(new Error("open_url cannot access local, private or non-public network addresses."));
-    }
-    const all = typeof options === "object" && options !== null && "all" in options && options.all;
-    if (all) callback(null, ipv4);
-    else callback(null, ipv4[0].address, ipv4[0].family);
+/**
+ * Resolves a hostname to a publicly routable IPv4 address. The resolved set is
+ * validated here and the connection is then made to that address directly, so
+ * the request can never be routed to a private address by the resolver.
+ */
+function resolvePublicIpv4(hostname: string, signal: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new Error("Cancelled."));
+    dns.lookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
+      if (signal.aborted) return reject(new Error("Cancelled."));
+      if (error) return reject(error);
+      const ipv4 = addresses.filter((entry) => entry.family === 4);
+      if (!ipv4.length || ipv4.some((entry) => !isPublicAddress(entry.address))) {
+        return reject(new Error("open_url cannot access local, private or non-public network addresses."));
+      }
+      resolve(ipv4[0].address);
+    });
   });
 }
 
-function requestPage(url: URL, signal: AbortSignal): Promise<{ redirect?: string; text?: string }> {
+function requestPage(url: URL, ip: string, signal: AbortSignal): Promise<{ redirect?: string; text?: string }> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) return reject(new Error("Cancelled."));
-    const transport = url.protocol === "https:" ? https : http;
-    const request = transport.get(url, {
+    const isHttps = url.protocol === "https:";
+    const port = isHttps ? 443 : 80;
+    const baseOptions = {
+      hostname: ip,
+      port,
+      path: url.pathname + url.search,
+      method: "GET",
       agent: false,
-      lookup: lookupPublic as typeof dns.lookup,
-      headers: { accept: "text/html, text/plain, application/xhtml+xml", "accept-encoding": "identity" },
-    }, (response) => {
+      setHost: false,
+      headers: {
+        host: url.host,
+        accept: "text/html, text/plain, application/xhtml+xml",
+        "accept-encoding": "identity",
+      },
+    };
+    const onResponse = (response: http.IncomingMessage) => {
       const status = response.statusCode ?? 0;
       if ([301, 302, 303, 307, 308].includes(status)) {
         const location = response.headers.location;
@@ -117,7 +138,10 @@ function requestPage(url: URL, signal: AbortSignal): Promise<{ redirect?: string
       response.on("end", finish);
       response.on("error", reject);
       response.on("aborted", () => { if (!truncated) reject(new Error("open_url response was interrupted.")); });
-    });
+    };
+    const request = isHttps
+      ? https.get({ ...baseOptions, servername: stripBrackets(url.hostname) }, onResponse)
+      : http.get(baseOptions, onResponse);
     request.on("error", reject);
     const cancel = () => request.destroy(new Error("Cancelled."));
     signal.addEventListener("abort", cancel, { once: true });
@@ -137,7 +161,8 @@ export async function openUrl(raw: string, signal: AbortSignal): Promise<string>
   try {
     let url = parseUrl(raw);
     for (let count = 0; count <= MAX_REDIRECTS; count++) {
-      const page = await requestPage(url, timeout.signal);
+      const ip = await resolvePublicIpv4(stripBrackets(url.hostname), timeout.signal);
+      const page = await requestPage(url, ip, timeout.signal);
       if (page.text !== undefined) return page.text;
       if (count === MAX_REDIRECTS) throw new Error("open_url exceeded the redirect limit.");
       url = parseUrl(new URL(page.redirect!, url).href);

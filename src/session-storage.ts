@@ -86,15 +86,40 @@ export function getPinnedFilesPath(projectStorageDir: string): string {
   return path.join(projectStorageDir, "pinned.json");
 }
 
+/** A pinned project file. Manual pins are permanent (user/model unpin only). */
+export interface PinnedFileEntry {
+  path: string;
+  manual: boolean;
+}
+
+function normalizePinnedEntry(value: unknown): PinnedFileEntry | null {
+  if (typeof value === "string") {
+    // Legacy format stored a bare path; treat those as manual pins.
+    return { path: value, manual: true };
+  }
+  if (value && typeof value === "object") {
+    const entry = value as { path?: unknown; manual?: unknown };
+    if (typeof entry.path === "string") {
+      return { path: entry.path, manual: entry.manual === true };
+    }
+  }
+  return null;
+}
+
 export async function loadPinnedFiles(
   projectStorageDir: string,
-): Promise<string[]> {
+): Promise<PinnedFileEntry[]> {
   const target = getPinnedFilesPath(projectStorageDir);
   try {
     const raw = await fs.promises.readFile(target, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (Array.isArray(parsed)) {
-      return parsed.filter((p): p is string => typeof p === "string");
+      const entries: PinnedFileEntry[] = [];
+      for (const item of parsed) {
+        const entry = normalizePinnedEntry(item);
+        if (entry) entries.push(entry);
+      }
+      return entries;
     }
     return [];
   } catch (error) {
@@ -110,10 +135,14 @@ export async function loadPinnedFiles(
 
 export async function savePinnedFiles(
   projectStorageDir: string,
-  pinnedFiles: string[],
+  pinnedFiles: PinnedFileEntry[],
 ): Promise<void> {
   const target = getPinnedFilesPath(projectStorageDir);
-  await atomicWriteFile(target, JSON.stringify(pinnedFiles, null, 2));
+  const data = pinnedFiles.map((entry) => ({
+    path: entry.path,
+    manual: entry.manual,
+  }));
+  await atomicWriteFile(target, JSON.stringify(data, null, 2));
 }
 
 function safeSessionFileName(sessionId: string): string {

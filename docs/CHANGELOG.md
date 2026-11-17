@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] - 2026-11-17
+
+- **Fixed `open_url`**: the tool no longer fails with
+  `The "listener" argument must be of type function` in Pulsar's renderer. It
+  now resolves and validates DNS itself and connects to the resulting address
+  directly, keeping the same SSRF guard.
+- **HTTPS proxies**: the proxy tunnel now uses a hand-written `CONNECT`
+  exchange, so `https://` (TLS) proxies are handled correctly alongside plain
+  `http://` proxies instead of failing during the TLS handshake.
+- **Search selector**: the `native` option is hidden for providers without
+  server-side search (non-Responses), so it is no longer offered where it
+  cannot work.
+- **Per-agent `includeReasoning`**: added an `includeReasoning` agent option
+  plus an **Ask reasoning** composer checkbox next to **Thoughts**. The global
+  **Thoughts** checkbox now only controls display; requesting reasoning is
+  per agent.
+- Tool-call file locations are shown relative to the project root with a
+  95% font size, matching grep output.
+- **Compact tool cards**: status text, the "Show more" button and the summary
+  row are gone. Completed calls get a subtle green background, failures a red
+  tint plus an error icon, and running calls a spinner; a rotating `›` chevron
+  collapses and expands the body.
+- **`pin_file` tool and auto-pinning**: the agent can now pin files itself, and
+  a new per-project `autoPinThreshold` pins files automatically after a set
+  number of `read_file` calls. Read counts are stored per file in `tree.json`;
+  manual pins are permanent, auto-pins are evicted least-read-first when the
+  pin list fills up.
+- **`delete_file` tool and project trash**: the agent deletes files by moving
+  them into `.toRemove` at the project root. `.toRemove` is ignored by the file
+  index and search, and a trash button next to the settings gear empties it
+  after confirmation.
+
 ## [0.9.3] - 2026-10-29
 
 - Correct the displayed defaults for tool turns and automatic compaction.

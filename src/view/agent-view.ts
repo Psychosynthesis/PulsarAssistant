@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import * as path from "path";
 import { CompositeDisposable, Disposable, TextEditor } from "atom";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -28,6 +29,7 @@ import {
   readProjectPolicy,
   setActiveAgentId,
   setAgentApiFormat,
+  setAgentIncludeReasoning,
   setAgentReasoningEffort,
   setAgentWebSearch,
   setProjectMaxTurnRequests,
@@ -47,7 +49,7 @@ import { renderMarkdownHtml } from "./markdown";
 import { ComposerStatusBar } from "./components/composer-status-bar";
 import { PlanBarView } from "./components/plan-bar-view";
 import { ToolCallManager, ToolUpdate } from "./components/tool-call-view";
-import { toProjectRelativePath } from "../paths";
+import { toDisplayPath, toProjectRelativePath } from "../paths";
 import { PermissionManager } from "./components/permission-view";
 import {
   TestCommandModal,
@@ -175,6 +177,7 @@ export class PulsarAssistantView {
   private settingsView!: AgentSettingsView;
   private compactButton!: HTMLButtonElement;
   private newSessionButton!: HTMLButtonElement;
+  private clearTrashButton!: HTMLButtonElement;
   private projectSessions: ProjectSessionEntry[] = [];
   private sessionsRequestId = 0;
   private sessionsLoaded = false;
@@ -213,6 +216,7 @@ export class PulsarAssistantView {
   private permissionManager!: PermissionManager;
   private pinnedFilesPanel!: PinnedFilesView;
   private includeReasoningCheckbox!: HTMLInputElement;
+  private requestReasoningCheckbox!: HTMLInputElement;
 
   private streamRole: string | null = null;
   private streamMessageId: acp.MessageId | null = null;
@@ -260,7 +264,17 @@ export class PulsarAssistantView {
     this.renderAgentPicker();
     this.renderModelSelector();
     this.settingsView.refresh();
+    this.refreshRequestReasoning();
     this.updateInputControls();
+  }
+
+  private refreshRequestReasoning(): void {
+    const target = this.activeTarget;
+    const openai = target?.kind === "openai" ? target : null;
+    this.requestReasoningCheckbox.disabled = !openai;
+    this.requestReasoningCheckbox.checked = openai
+      ? openai.includeReasoning !== false
+      : true;
   }
 
   private generatingIndicator: HTMLElement | null = null;
@@ -293,6 +307,7 @@ export class PulsarAssistantView {
     const self = this;
     this.toolCallManager = new ToolCallManager({
       openLocation: (p, l) => self.openLocation(p, l),
+      displayPath: (p) => toDisplayPath(self.projectRoot, p),
       scheduleFollow: (p, l) => self.scheduleFollow(p, l),
       get followAgent() {
         return self.followAgent;
@@ -316,6 +331,7 @@ export class PulsarAssistantView {
 
     this.permissionManager = new PermissionManager({
       openLocation: (p, l) => self.openLocation(p, l),
+      displayPath: (p) => toDisplayPath(self.projectRoot, p),
       renderToolContent: (item) => self.toolCallManager.renderToolContent(item),
       makeButton: (label, onClick) => self.makeButton(label, onClick),
       addTooltipDisposable: (d) => self.conversationTooltips.add(d),
@@ -880,6 +896,19 @@ export class PulsarAssistantView {
       setWebSearch: (value) => this.applyWebSearch(value),
       reportError: (message) => this.appendError(message),
     });
+    this.clearTrashButton = createElement("button", {
+      class: ["pulsar-assistant-clear-trash", "icon", "icon-trashcan"],
+    });
+    this.clearTrashButton.setAttribute("aria-label", "Empty .toRemove");
+    this.subscriptions.add(
+      atom.tooltips.add(this.clearTrashButton, {
+        title: "Empty .toRemove (files the agent deleted)",
+        placement: "bottom",
+      }),
+    );
+    this.clearTrashButton.addEventListener("click", () => {
+      this.confirmEmptyTrash();
+    });
     this.infoButton = createElement("button", { class: "pulsar-assistant-info-toggle", style: { display: "none" } });
     this.infoButton.textContent = "More\u2026";
     this.infoButton.setAttribute("aria-label", "Agent details");
@@ -901,6 +930,7 @@ export class PulsarAssistantView {
     rightGroup.appendChild(this.compactButton);
     rightGroup.appendChild(this.sessionListView.getToggleElement());
     rightGroup.appendChild(this.newSessionButton);
+    rightGroup.appendChild(this.clearTrashButton);
     rightGroup.appendChild(this.settingsView.getElement());
 
     this.runtimeStatusEl.appendChild(this.infoButton);
@@ -1027,12 +1057,29 @@ export class PulsarAssistantView {
     includeReasoningLabel.appendChild(document.createTextNode("Thoughts"));
     this.subscriptions.add(
       atom.tooltips.add(includeReasoningLabel, {
+        title: "Show model reasoning in the composer status line.",
+      }),
+    );
+
+    this.requestReasoningCheckbox = createElement("input");
+    this.requestReasoningCheckbox.type = "checkbox";
+    this.requestReasoningCheckbox.addEventListener("change", () => {
+      this.applyIncludeReasoning(this.requestReasoningCheckbox.checked);
+    });
+    const requestReasoningLabel = createElement("label", {
+      class: "pulsar-assistant-request-reasoning",
+    });
+    requestReasoningLabel.appendChild(this.requestReasoningCheckbox);
+    requestReasoningLabel.appendChild(document.createTextNode("Ask reasoning"));
+    this.subscriptions.add(
+      atom.tooltips.add(requestReasoningLabel, {
         title:
-          "Ask the model API to stream its reasoning (include_reasoning). Toggle off if a provider rejects the flag.",
+          "Ask the model API to stream its reasoning (include_reasoning). Per-agent setting; changing it restarts the agent.",
       }),
     );
 
     actionButtons.appendChild(includeReasoningLabel);
+    actionButtons.appendChild(requestReasoningLabel);
     actionButtons.appendChild(this.followButton);
     actionButtons.appendChild(this.stopButton);
     actionButtons.appendChild(this.sendButton);
@@ -1151,6 +1198,17 @@ export class PulsarAssistantView {
       return;
     }
     setAgentWebSearch(target.id, value);
+    this.relaunchActiveAgent();
+  }
+
+  private applyIncludeReasoning(value: boolean): void {
+    const target = this.activeTarget;
+    if (!target || target.kind !== "openai") return;
+    if (target.includeReasoning === value) {
+      this.refreshControls();
+      return;
+    }
+    setAgentIncludeReasoning(target.id, value);
     this.relaunchActiveAgent();
   }
 
@@ -2682,6 +2740,45 @@ export class PulsarAssistantView {
       names[id] = agent.name || id;
     }
     return names;
+  }
+
+  private confirmEmptyTrash(): void {
+    const trashDir = path.join(this.projectRoot, ".toRemove");
+    void fs.promises
+      .readdir(trashDir)
+      .then((entries) => {
+        if (entries.length === 0) {
+          atom.notifications.addInfo(".toRemove is already empty");
+          return;
+        }
+        atom.confirm(
+          {
+            type: "warning",
+            message: "Empty .toRemove?",
+            detail:
+              "Permanently delete all files the agent moved to .toRemove in this project? This cannot be undone.",
+            buttons: ["Empty trash", "Cancel"],
+            defaultId: 1,
+          },
+          (response) => {
+            if (response === 0) this.emptyTrash(trashDir);
+          },
+        );
+      })
+      .catch(() => {
+        atom.notifications.addInfo(".toRemove is already empty");
+      });
+  }
+
+  private emptyTrash(trashDir: string): void {
+    fs.promises
+      .rm(trashDir, { recursive: true, force: true })
+      .then(() => {
+        atom.notifications.addSuccess(".toRemove emptied");
+      })
+      .catch((error) => {
+        this.appendError(errorMessage(error));
+      });
   }
 
   private confirmDeleteSession(id: string, cwd?: string): void {

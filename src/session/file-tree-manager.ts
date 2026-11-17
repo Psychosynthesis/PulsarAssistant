@@ -163,6 +163,19 @@ export class ProjectFileTreeManager {
     this.scheduleTreeSave();
   }
 
+  /**
+   * Records a tool read against the file statistics and schedules a save.
+   * Returns the new read count (0 when the file is not indexed).
+   */
+  async recordFileRead(filePath: string): Promise<number> {
+    const rel = toPosixPath(path.relative(this.projectRoot, filePath));
+    const count = this.fileTree.incrementReadCount(rel);
+    if (count > 0) {
+      this.scheduleTreeSave();
+    }
+    return count;
+  }
+
   dispose(): void {
     if (this.fileTreeSubscription) {
       this.fileTreeSubscription.dispose();

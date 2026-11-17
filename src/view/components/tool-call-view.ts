@@ -7,12 +7,11 @@ export interface ToolView {
   heading: HTMLElement;
   title: HTMLElement;
   status: HTMLElement;
+  chevron: HTMLButtonElement;
   body: HTMLElement;
-  summary: HTMLElement;
-  toggle: HTMLButtonElement;
+  details: HTMLElement;
   expanded: boolean;
   collapsible: boolean;
-  diff: boolean;
   location: acp.ToolCallLocation | null;
   locationTooltip: Disposable | null;
   pinButton: HTMLButtonElement | null;
@@ -33,6 +32,7 @@ export type ToolUpdate = {
 
 export interface ToolCallHost {
   openLocation: (path: string, line?: number) => Promise<void>;
+  displayPath?: (path: string) => string;
   scheduleFollow?: (path: string, line?: number | null) => void;
   followAgent?: boolean;
   addTooltipDisposable: (d: Disposable) => void;
@@ -45,51 +45,29 @@ export interface ToolCallHost {
   isPinned?: (path: string) => boolean;
 }
 
-function rawOutputText(update: ToolUpdate): string | null {
-  const raw = update.rawOutput;
-  if (typeof raw === "string") return raw;
-  if (raw && typeof raw === "object") {
-    const candidate = (raw as { output?: unknown }).output;
-    if (typeof candidate === "string") return candidate;
-  }
-  return null;
-}
-
-function summarizeToolUpdate(update: ToolUpdate): string {
-  const text = rawOutputText(update);
-  if (text !== null) {
-    const clean = text.trim();
-    if (!clean) return "";
-    const lines = clean.split(/\r?\n/).filter(Boolean);
-    const title = update.title ?? "";
-    if (title.startsWith("Grep")) {
-      return `${lines.length} results`;
-    }
-    if (title.startsWith("Glob")) {
-      return `${lines.length} files`;
-    }
-    if (title.startsWith("List")) {
-      return `${lines.length} entries`;
-    }
-    if (title.startsWith("Test")) {
-      return `${lines.length} lines`;
-    }
-    return lines[0];
-  }
-
-  const content = update.content;
-  if (content && content.length > 0 && content[0].type === "diff") {
-    return `Diff for ${content[0].path}`;
-  }
-  return "";
-}
-
 function setCollapsed(view: ToolView, collapsed: boolean): void {
   view.expanded = !collapsed;
   view.body.style.display = collapsed ? "none" : "";
-  view.summary.style.display =
-    collapsed && view.summary.textContent ? "" : "none";
-  view.toggle.textContent = collapsed ? "Show more" : "Show less";
+  view.chevron.classList.toggle("expanded", !collapsed);
+  view.chevron.setAttribute("aria-expanded", String(!collapsed));
+  view.chevron.title = collapsed ? "Show details" : "Hide details";
+}
+
+function applyStatus(view: ToolView, status: string | undefined): void {
+  const state = status || "pending";
+  view.element.dataset.status = state;
+  view.status.replaceChildren();
+  if (state === "in_progress" || state === "pending") {
+    view.status.appendChild(
+      createElement("span", {
+        class: ["icon", "icon-sync", "pulsar-assistant-spin"],
+      }),
+    );
+  } else if (state === "failed") {
+    view.status.appendChild(
+      createElement("span", { class: ["icon", "icon-alert"] }),
+    );
+  }
 }
 
 export class ToolCallManager {
@@ -151,11 +129,21 @@ export class ToolCallManager {
 
     const heading = createElement("div", { class: "pulsar-assistant-tool-heading" });
 
+    const status = createElement("span", { class: "pulsar-assistant-tool-status" });
+
+    const chevron = createElement("button", {
+      class: "pulsar-assistant-tool-chevron",
+      style: { display: "none" },
+    });
+    chevron.type = "button";
+    chevron.textContent = "\u203a";
+    chevron.title = "Show details";
+    chevron.setAttribute("aria-expanded", "false");
+
     const title = createElement("span", { class: "pulsar-assistant-tool-title" });
     title.textContent = toolCall.title || "Tool Call";
 
-    const status = createElement("span", { class: "pulsar-assistant-tool-status" });
-    status.textContent = toolCall.status || "pending";
+    const details = createElement("span", { class: "pulsar-assistant-tool-details" });
 
     const deleteButton = createElement("button", {
       class: ["icon", "icon-trashcan", "pulsar-assistant-item-delete"],
@@ -167,32 +155,26 @@ export class ToolCallManager {
       this.host.onDeleteToolCall?.(toolCall.toolCallId);
     });
 
-    const summary = createElement("div", { class: "pulsar-assistant-tool-summary", style: { display: "none" } });
-
-    const toggle = createElement("button", { class: "pulsar-assistant-tool-toggle", style: { display: "none" } });
-    toggle.textContent = "Show more";
-
-    heading.appendChild(title);
     heading.appendChild(status);
+    heading.appendChild(chevron);
+    heading.appendChild(title);
+    heading.appendChild(details);
     heading.appendChild(deleteButton);
     block.appendChild(heading);
 
     const body = createElement("div", { class: "pulsar-assistant-tool-body" });
     block.appendChild(body);
-    block.appendChild(summary);
-    block.appendChild(toggle);
 
     const toolView: ToolView = {
       element: block,
       heading,
       title,
       status,
+      chevron,
       body,
-      summary,
-      toggle,
+      details,
       expanded: false,
       collapsible: false,
-      diff: false,
       location: null,
       locationTooltip: null,
       pinButton: null,
@@ -200,7 +182,7 @@ export class ToolCallManager {
     };
     this.toolViews.set(toolCall.toolCallId, toolView);
 
-    toggle.addEventListener("click", () => {
+    chevron.addEventListener("click", () => {
       setCollapsed(toolView, toolView.expanded);
       this.host.scrollToBottom();
     });
@@ -235,8 +217,7 @@ export class ToolCallManager {
     }
 
     if (update.status) {
-      view.status.textContent = update.status;
-      view.element.dataset.status = update.status;
+      applyStatus(view, update.status);
     }
 
     if (update.locations && update.locations.length > 0) {
@@ -256,14 +237,19 @@ export class ToolCallManager {
         }
       }
       if (!view.heading.querySelector(".pulsar-assistant-location")) {
-        const link = createElement("button", { class: ["btn-link", "pulsar-assistant-location"] });
+        const link = createElement("button", {
+          class: ["btn-link", "pulsar-assistant-location", "pulsar-assistant-tool-location"],
+        });
         const lineSuffix = loc.line != null ? `:${loc.line}` : "";
-        link.textContent = `${loc.path}${lineSuffix}`;
+        const displayPath = this.host.displayPath
+          ? this.host.displayPath(loc.path)
+          : loc.path;
+        link.textContent = `${displayPath}${lineSuffix}`;
         link.addEventListener("click", (e) => {
           e.stopPropagation();
           this.host.openLocation(loc.path, loc.line ?? undefined);
         });
-        view.heading.insertBefore(link, view.status);
+        view.details.appendChild(link);
       }
 
       view.readFile =
@@ -286,7 +272,6 @@ export class ToolCallManager {
             : this.renderToolContent(item),
         );
       }
-      view.diff = update.content![0].type === "diff";
     } else if (update.rawInput != null || update.rawOutput != null) {
       if (update.rawInput != null) {
         const pre = createElement("pre", { class: "pulsar-assistant-code-block" });
@@ -306,16 +291,11 @@ export class ToolCallManager {
       }
     }
 
-    const summaryText = summarizeToolUpdate(update);
-    view.summary.textContent = summaryText;
-
     const wasCollapsible = view.collapsible;
     view.collapsible = true;
-    view.toggle.style.display = "";
+    view.chevron.style.display = "";
     if (!wasCollapsible) {
       setCollapsed(view, true);
-    } else if (!view.expanded) {
-      view.summary.style.display = summaryText ? "" : "none";
     }
   }
 
@@ -333,13 +313,13 @@ export class ToolCallManager {
     if (!view.pinButton) {
       view.pinButton = createElement("button", {
         class: ["btn-link", "pulsar-assistant-pin"],
-      }) as HTMLButtonElement;
+      });
       view.pinButton.type = "button";
       view.pinButton.addEventListener("click", (e) => {
         e.stopPropagation();
         if (view.location) this.host.pinFile?.(view.location.path);
       });
-      view.heading.insertBefore(view.pinButton, view.status);
+      view.details.appendChild(view.pinButton);
     }
 
     if (pinned) {

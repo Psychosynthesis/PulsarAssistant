@@ -22,6 +22,7 @@ export type OpenAiAgentConfig = BaseAgentConfig & {
   apiFormat?: "chat-completions" | "responses";
   reasoningEffort?: "none" | "low" | "medium" | "high";
   webSearch?: "off" | "auto" | "native" | "local";
+  includeReasoning?: boolean;
 };
 
 export type AcpAgentConfig = BaseAgentConfig & {
@@ -66,6 +67,7 @@ export type OpenaiLaunchTarget = {
   apiFormat: "chat-completions" | "responses";
   reasoningEffort?: "none" | "low" | "medium" | "high";
   webSearch: "off" | "auto" | "native" | "local";
+  includeReasoning: boolean;
 };
 
 export type CursorLaunchTarget = {
@@ -214,6 +216,7 @@ function normalizeAgent(
     delete agent.reasoningEffort;
   }
   agent.webSearch = normalizeWebSearchMode(entry.webSearch);
+  agent.includeReasoning = entry.includeReasoning !== false;
   return agent;
 }
 
@@ -347,6 +350,7 @@ export function toLaunchTarget(
         ? { reasoningEffort: openaiAgent.reasoningEffort }
         : {}),
       webSearch: normalizeWebSearchMode(openaiAgent.webSearch),
+      includeReasoning: openaiAgent.includeReasoning !== false,
     };
   }
 
@@ -395,7 +399,8 @@ export function launchTargetsEqual(
       a.stream === b.stream &&
       a.apiFormat === b.apiFormat &&
       a.reasoningEffort === b.reasoningEffort &&
-      a.webSearch === b.webSearch
+      a.webSearch === b.webSearch &&
+      a.includeReasoning === b.includeReasoning
     );
   }
   if (a.kind === "cursor" && b.kind === "cursor") {

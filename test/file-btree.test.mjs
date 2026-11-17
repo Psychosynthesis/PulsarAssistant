@@ -90,6 +90,31 @@ test("BTree deletion: removes keys and preserves ordering", () => {
   assert.deepEqual(remaining, sortedCopy);
 });
 
+test("ProjectFileTree: read statistics persist across updates", async (t) => {
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pulsar-btree-reads-"));
+  t.after(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  await fs.promises.writeFile(path.join(tmpDir, "app.ts"), "const a = 1;");
+
+  const pTree = new ProjectFileTree(tmpDir, 4);
+  await pTree.scanProject(DEFAULT_PROJECT_SKIP_DIRS);
+
+  assert.equal(pTree.getReadCount("app.ts"), 0);
+  assert.equal(pTree.incrementReadCount("app.ts"), 1);
+  assert.equal(pTree.incrementReadCount("app.ts"), 2);
+  assert.equal(pTree.incrementReadCount("missing.ts"), 0);
+
+  // A metadata refresh must not reset the counter.
+  await pTree.updatePath("app.ts");
+  assert.equal(pTree.getReadCount("app.ts"), 2);
+
+  // A full rescan preserves counters too.
+  await pTree.scanProject(DEFAULT_PROJECT_SKIP_DIRS);
+  assert.equal(pTree.getReadCount("app.ts"), 2);
+});
+
 test("ProjectFileTree: scan, serialize, save and reload", async (t) => {
   const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pulsar-btree-test-"));
   t.after(async () => {

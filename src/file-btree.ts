@@ -10,10 +10,13 @@ export interface FileEntryInfo {
   size: number;
   mtime: number;
   isDirectory: boolean;
+  /** Number of times the agent read this file (persisted read statistics). */
+  reads?: number;
 }
 
 export interface FileMetadata extends FileEntryInfo {
   path: string; // posix-style relative path from project root
+  reads: number;
 }
 
 export interface SerializedBTreeNode<V> {
@@ -444,16 +447,39 @@ export class ProjectFileTree {
       size: val.size,
       mtime: val.mtime,
       isDirectory: val.isDirectory,
+      reads: val.reads ?? 0,
     };
   }
 
   set(posixRelPath: string, meta: FileMetadata | FileEntryInfo): void {
+    const existing = this.tree.search(posixRelPath);
+    const reads = existing?.reads ?? meta.reads ?? 0;
     this.tree.insert(posixRelPath, {
       size: meta.size,
       mtime: meta.mtime,
       isDirectory: meta.isDirectory,
+      reads,
     });
     this.updatedAt = Date.now();
+  }
+
+  /** Increments the read counter for a file and returns the new count. */
+  incrementReadCount(posixRelPath: string): number {
+    const existing = this.tree.search(posixRelPath);
+    if (!existing) return 0;
+    const reads = (existing.reads ?? 0) + 1;
+    this.tree.insert(posixRelPath, {
+      size: existing.size,
+      mtime: existing.mtime,
+      isDirectory: existing.isDirectory,
+      reads,
+    });
+    this.updatedAt = Date.now();
+    return reads;
+  }
+
+  getReadCount(posixRelPath: string): number {
+    return this.tree.search(posixRelPath)?.reads ?? 0;
   }
 
   remove(posixRelPath: string): boolean {
@@ -472,6 +498,7 @@ export class ProjectFileTree {
       size: e.value.size,
       mtime: e.value.mtime,
       isDirectory: e.value.isDirectory,
+      reads: e.value.reads ?? 0,
     }));
   }
 
@@ -486,10 +513,12 @@ export class ProjectFileTree {
       size: e.value.size,
       mtime: e.value.mtime,
       isDirectory: e.value.isDirectory,
+      reads: e.value.reads ?? 0,
     }));
   }
 
   async scanProject(skipDirs: Set<string> = getConfiguredIgnoredDirs()): Promise<void> {
+    const oldTree = this.tree;
     const newTree = new BTree<FileEntryInfo>(this.tree.t);
 
     const stack: Array<{ dir: string; relative: string }> = [
@@ -527,6 +556,8 @@ export class ProjectFileTree {
               size: stat.size,
               mtime: stat.mtimeMs,
               isDirectory: false,
+              // Preserve read statistics across rescans of an existing tree.
+              reads: oldTree.search(relPath)?.reads ?? 0,
             });
           } catch {
             // Ignore stat errors for inaccessible files

@@ -12,6 +12,7 @@ test("resolveProjectPolicy: denies when projects is missing", () => {
     maxTurnRequests: null,
     toolCallDelayMs: null,
     toolOutputCompactInterval: null,
+    autoPinThreshold: null,
   });
 });
 
@@ -120,6 +121,24 @@ test("resolveProjectPolicy: ignores invalid toolOutputCompactInterval", () => {
       [root]: { toolOutputCompactInterval: value },
     });
     assert.equal(policy.toolOutputCompactInterval, null);
+  }
+});
+
+test("resolveProjectPolicy: reads a positive autoPinThreshold", () => {
+  const root = path.resolve("/tmp/app");
+  const policy = resolveProjectPolicy(root, {
+    [root]: { autoPinThreshold: 3 },
+  });
+  assert.equal(policy.autoPinThreshold, 3);
+});
+
+test("resolveProjectPolicy: ignores invalid autoPinThreshold", () => {
+  const root = path.resolve("/tmp/app");
+  for (const value of [0, -1, 1.5, "3", null, undefined]) {
+    const policy = resolveProjectPolicy(root, {
+      [root]: { autoPinThreshold: value },
+    });
+    assert.equal(policy.autoPinThreshold, null);
   }
 });
 

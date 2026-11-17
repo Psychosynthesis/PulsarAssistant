@@ -46,3 +46,16 @@ export function toProjectRelativePath(root: string, filePath: string): string {
   }
   return toPosixPath(rel);
 }
+
+/**
+ * Project-relative path for UI display. Falls back to the original path when
+ * the target is outside the project root, so tool/permission file links can be
+ * rendered relative without ever throwing on out-of-root locations.
+ */
+export function toDisplayPath(root: string, filePath: string): string {
+  try {
+    return toProjectRelativePath(root, filePath);
+  } catch {
+    return filePath;
+  }
+}
