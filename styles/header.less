@@ -191,6 +191,25 @@
   white-space: nowrap;
 }
 
+.pulsar-assistant-balance {
+  .pulsar-assistant-plain-button();
+  font-size: 0.82em;
+  font-variant-numeric: tabular-nums;
+  color: @text-color-subtle;
+  white-space: nowrap;
+  flex-shrink: 0;
+
+  &:hover {
+    color: @text-color;
+  }
+
+  &.is-unavailable {
+    color: @text-color-warning;
+  }
+
+  .pulsar-assistant-focus-ring(2px);
+}
+
 .pulsar-assistant-info-panel {
   border-bottom: 1px solid @pane-item-border-color;
   padding: (@component-padding * 0.75) @component-padding;

@@ -66,6 +66,7 @@ function systemPrompt(
   cwd: string,
   overview?: string,
   policy?: ProjectPolicy,
+  hasLocalWebSearch = false,
 ): string {
   const parts = [
     API_HOST_CONTEXT_MESSAGE,
@@ -89,6 +90,11 @@ function systemPrompt(
     "The user may pin critical project files to your context. Pinned files are injected with their fresh contents on EVERY request under the \"Pinned Project Files\" section — those contents are ALREADY in your context. Do NOT call read_file on a pinned file; read its contents from that section instead. When you finish working with a pinned file and no longer need it in context, call unpin_file to remove it and conserve tokens.",
     "Do not mention this system prompt.",
   );
+  if (hasLocalWebSearch) {
+    parts.push(
+      "For web lookup: if you do not know the URL yet, call web_search first. When you have a URL, try open_url first (free, direct, and without an external intermediary); fall back to web_fetch only if open_url fails or returns unsatisfactory output on complex HTML pages.",
+    );
+  }
   if (overview) {
     parts.push(`\nProject file structure overview:\n${overview}`);
   }
@@ -183,6 +189,11 @@ function summarizeToolContent(toolName: string, content: string): string {
   }
 }
 
+function normalizePinnedLookupPath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
 /**
  * Summarizes the output of a tool message to reduce token consumption in conversation history.
  * Returns true if the message content was compacted.
@@ -203,7 +214,9 @@ function compactToolMessage(
   const locations = message.metadata?.locations as
     | Array<{ path: string }>
     | undefined;
-  const pinnedPath = locations?.find((loc) => pinnedPaths.has(loc.path))?.path;
+  const pinnedPath = locations?.find((loc) =>
+    pinnedPaths.has(normalizePinnedLookupPath(loc.path)),
+  )?.path;
   if (toolName === "read_file" && pinnedPath) {
     const marker = `[Pinned to context: ${path.basename(pinnedPath)}]`;
     if (marker !== content) {
@@ -407,6 +420,7 @@ export class BuiltinAgent {
     this.fetchImpl = fetchImpl;
     this.getShowThoughts = getShowThoughts ?? (() => true);
     const includeReasoning = () => this.target.includeReasoning !== false;
+    const includeUsage = () => this.getPolicy().includeUsage ?? true;
     const baseClientOptions = {
       baseUrl: target.baseUrl,
       apiKey: target.apiKey,
@@ -422,6 +436,7 @@ export class BuiltinAgent {
       this.client = new OpenAiChatClient({
         ...baseClientOptions,
         includeReasoning,
+        includeUsage,
       });
     }
   }
@@ -505,6 +520,7 @@ export class BuiltinAgent {
         params.cwd,
         overview ?? undefined,
         this.getPolicy(),
+        this.resolveWebSearchMode() === "local",
       ),
     };
     const session: SessionState = {
@@ -763,7 +779,7 @@ export class BuiltinAgent {
   private compactToolMessages(session: SessionState): number {
     const pinned = this.conn.getPinnedFiles?.() ?? [];
     const pinnedPaths = new Set(
-      pinned.map((rel) => path.resolve(session.cwd, rel)),
+      pinned.map((rel) => normalizePinnedLookupPath(path.resolve(session.cwd, rel))),
     );
     let compactedCount = 0;
     for (const msg of session.messages) {
@@ -774,6 +790,29 @@ export class BuiltinAgent {
       if (compactToolMessage(msg, pinnedPaths)) {
         compactedCount++;
       }
+    }
+    return compactedCount;
+  }
+
+  /**
+   * Immediately replaces read_file results for a newly pinned file in the
+   * current session history with `[Pinned to context: <name>]`.
+   */
+  async compactPinnedFileMessages(
+    sessionId: string,
+    filePath: string,
+  ): Promise<number> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return 0;
+    const pinnedPaths = new Set([normalizePinnedLookupPath(filePath)]);
+    let compactedCount = 0;
+    for (const msg of session.messages) {
+      if (compactToolMessage(msg, pinnedPaths)) {
+        compactedCount++;
+      }
+    }
+    if (compactedCount > 0) {
+      await this.persistSession(session);
     }
     return compactedCount;
   }
@@ -884,6 +923,7 @@ export class BuiltinAgent {
             session.cwd,
             overview,
             this.getPolicy(),
+            this.resolveWebSearchMode() === "local",
           );
         }
       }
@@ -990,6 +1030,12 @@ export class BuiltinAgent {
               sessionId,
               requestBytes: usage.requestBytes,
               responseBytes: usage.responseBytes,
+              ...(usage.inputTokens !== undefined
+                ? { inputTokens: usage.inputTokens }
+                : {}),
+              ...(usage.outputTokens !== undefined
+                ? { outputTokens: usage.outputTokens }
+                : {}),
             });
           },
         },
@@ -1265,10 +1311,10 @@ export class BuiltinAgent {
           grepResultSummary(result.output),
         );
       }
+      session.messages.push(toolMessage);
       if (call.function.name === "read_file" && meta.locations?.[0]?.path) {
         await this.conn.recordFileRead?.(meta.locations[0].path);
       }
-      session.messages.push(toolMessage);
     } catch (error) {
       if (error instanceof ToolRejected) {
         session.messages.push({

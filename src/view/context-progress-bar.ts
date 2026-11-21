@@ -11,6 +11,8 @@ function formatTokens(num: number): string {
   return num.toString();
 }
 
+export type ContextUsageSource = "api" | "estimated";
+
 export class ContextProgressBar {
   readonly element: HTMLElement;
   private barTrack: HTMLElement;
@@ -19,6 +21,7 @@ export class ContextProgressBar {
   private tooltipDisposable: Disposable | null = null;
   private currentUsed = 0;
   private currentMax = 128_000;
+  private source: ContextUsageSource = "estimated";
 
   constructor() {
     this.element = createElement("div", { class: "pulsar-assistant-context-progress", style: { display: "none" } });
@@ -48,15 +51,21 @@ export class ContextProgressBar {
           this.currentMax > 0
             ? ((this.currentUsed / this.currentMax) * 100).toFixed(1)
             : "0.0";
-        return `Context: ${this.currentUsed.toLocaleString()} / ${this.currentMax.toLocaleString()} tokens (${pct}%)`;
+        const sourceLabel = this.source === "api" ? "API usage" : "estimated";
+        return `Context (${sourceLabel}): ${this.currentUsed.toLocaleString()} / ${this.currentMax.toLocaleString()} tokens (${pct}%)`;
       },
       placement: "bottom",
     });
   }
 
-  update(usedTokens: number, maxTokens: number): void {
+  update(
+    usedTokens: number,
+    maxTokens: number,
+    source: ContextUsageSource = "estimated",
+  ): void {
     this.currentUsed = Math.max(0, usedTokens);
     this.currentMax = Math.max(1, maxTokens);
+    this.source = source;
 
     const ratio = Math.min(1, this.currentUsed / this.currentMax);
     const percentage = Math.round(ratio * 100);

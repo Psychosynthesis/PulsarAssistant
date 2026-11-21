@@ -4,7 +4,12 @@ import {
   buildContextBlock,
   ContextAttachment,
 } from "../util";
-import { PINNED_FILES_LIMIT } from "../constants";
+import {
+  DEFAULT_AUTO_PIN_THRESHOLD,
+  PINNED_FILES_LIMIT,
+  PINNED_FILE_MAX_LINES,
+} from "../constants";
+import { estimateTokens } from "../token-estimate";
 import type { LaunchTarget } from "../agent-config";
 import {
   deleteStoredSession,
@@ -53,6 +58,7 @@ export class AgentSession {
   private startedTarget: LaunchTarget | null = null;
   private sessionListGeneration = 0;
   private pinnedFiles: PinnedFileEntry[] = [];
+  private pinnedTokensEstimate = 0;
   private readonly pinnedReady: Promise<void>;
 
   constructor(
@@ -70,9 +76,10 @@ export class AgentSession {
       this.editor,
     );
     this.pinnedReady = loadPinnedFiles(this.fileTreeManager.getStorageDir())
-      .then((files) => {
+      .then(async (files) => {
         this.pinnedFiles = files;
         if (this.pinnedFiles.length > 0) {
+          await this.refreshPinnedTokensEstimate();
           this.emit({
             type: "pinned-files-changed",
             files: this.getPinnedFiles(),
@@ -82,11 +89,39 @@ export class AgentSession {
       .catch((error) => {
         console.error("[pulsar-assistant] failed to load pinned files", error);
         this.pinnedFiles = [];
+        this.pinnedTokensEstimate = 0;
       });
   }
 
   getPinnedFiles(): string[] {
     return this.pinnedFiles.map((entry) => entry.path);
+  }
+
+  getPinnedTokensEstimate(): number {
+    return this.pinnedTokensEstimate;
+  }
+
+  private async refreshPinnedTokensEstimate(): Promise<void> {
+    if (this.pinnedFiles.length === 0) {
+      this.pinnedTokensEstimate = 0;
+      return;
+    }
+    let total = 20; // header overhead
+    for (const entry of this.pinnedFiles) {
+      const absolute = path.resolve(this.projectRoot, entry.path);
+      try {
+        const { content: raw } = await this.editor.readTextFile(absolute);
+        const lines = raw.split(/\r?\n/);
+        const clipped =
+          lines.length > PINNED_FILE_MAX_LINES
+            ? lines.slice(0, PINNED_FILE_MAX_LINES).join("\n")
+            : raw;
+        total += 12 + estimateTokens(entry.path) + estimateTokens(clipped);
+      } catch {
+        total += 16 + estimateTokens(entry.path);
+      }
+    }
+    this.pinnedTokensEstimate = total;
   }
 
   private async persistPinnedFiles(): Promise<void> {
@@ -109,6 +144,7 @@ export class AgentSession {
       if (!existing.manual) {
         existing.manual = true;
         await this.persistPinnedFiles();
+        await this.refreshPinnedTokensEstimate();
         this.emit({ type: "pinned-files-changed", files: this.getPinnedFiles() });
         return true;
       }
@@ -125,6 +161,10 @@ export class AgentSession {
     }
     this.pinnedFiles.push({ path: rel, manual: true });
     await this.persistPinnedFiles();
+    await this.backend?.compactPinnedFileMessages?.(
+      path.resolve(this.projectRoot, rel),
+    );
+    await this.refreshPinnedTokensEstimate();
     this.emit({ type: "pinned-files-changed", files: this.getPinnedFiles() });
     return true;
   }
@@ -136,6 +176,7 @@ export class AgentSession {
     if (index === -1) return false;
     this.pinnedFiles.splice(index, 1);
     await this.persistPinnedFiles();
+    await this.refreshPinnedTokensEstimate();
     this.emit({ type: "pinned-files-changed", files: this.getPinnedFiles() });
     return true;
   }
@@ -156,8 +197,8 @@ export class AgentSession {
     }
     const count = await this.fileTreeManager.recordFileRead(filePath);
     if (count <= 0) return;
-    const threshold = this.autoPinThreshold();
-    if (threshold == null || threshold < 1 || count < threshold) return;
+    const threshold = this.autoPinThreshold() ?? DEFAULT_AUTO_PIN_THRESHOLD;
+    if (threshold < 1 || count < threshold) return;
     if (this.pinnedFiles.some((entry) => entry.path === rel)) return;
     await this.autoPinFile(rel, count);
   }
@@ -210,6 +251,10 @@ export class AgentSession {
     }
     this.pinnedFiles.push({ path: relPath, manual: false });
     await this.persistPinnedFiles();
+    await this.backend?.compactPinnedFileMessages?.(
+      path.resolve(this.projectRoot, relPath),
+    );
+    await this.refreshPinnedTokensEstimate();
     this.emit({ type: "pinned-files-changed", files: this.getPinnedFiles() });
   }
 
@@ -224,6 +269,20 @@ export class AgentSession {
   onEvent(callback: Listener): { dispose: () => void } {
     this.listeners.add(callback);
     return { dispose: () => this.listeners.delete(callback) };
+  }
+
+  private handleBackendEvent(event: AgentEvent): void {
+    if (event.type === "file-written" && this.pinnedFiles.length > 0) {
+      try {
+        const rel = toProjectRelativePath(this.projectRoot, event.path);
+        if (this.pinnedFiles.some((entry) => entry.path === rel)) {
+          void this.refreshPinnedTokensEstimate();
+        }
+      } catch {
+        // ignore outside-project path
+      }
+    }
+    this.emit(event);
   }
 
   private emit(event: AgentEvent): void {
@@ -323,7 +382,7 @@ export class AgentSession {
         this.projectRoot,
         this.editor,
         this.fileTreeManager,
-        (event: AgentEvent) => this.emit(event),
+        (event: AgentEvent) => this.handleBackendEvent(event),
         this,
         resolveProxyUrl,
       );

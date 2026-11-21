@@ -13,6 +13,7 @@ test("resolveProjectPolicy: denies when projects is missing", () => {
     toolCallDelayMs: null,
     toolOutputCompactInterval: null,
     autoPinThreshold: null,
+    includeUsage: null,
   });
 });
 
@@ -132,14 +133,40 @@ test("resolveProjectPolicy: reads a positive autoPinThreshold", () => {
   assert.equal(policy.autoPinThreshold, 3);
 });
 
+test("resolveProjectPolicy: reads a zero autoPinThreshold (disables auto-pinning)", () => {
+  const root = path.resolve("/tmp/app");
+  const policy = resolveProjectPolicy(root, {
+    [root]: { autoPinThreshold: 0 },
+  });
+  assert.equal(policy.autoPinThreshold, 0);
+});
+
 test("resolveProjectPolicy: ignores invalid autoPinThreshold", () => {
   const root = path.resolve("/tmp/app");
-  for (const value of [0, -1, 1.5, "3", null, undefined]) {
+  for (const value of [-1, 1.5, "3", null, undefined]) {
     const policy = resolveProjectPolicy(root, {
       [root]: { autoPinThreshold: value },
     });
     assert.equal(policy.autoPinThreshold, null);
   }
+});
+
+test("resolveProjectPolicy: reads includeUsage as a boolean or defaults to null", () => {
+  const root = path.resolve("/tmp/app");
+  const enabled = resolveProjectPolicy(root, {
+    [root]: { includeUsage: true },
+  });
+  assert.equal(enabled.includeUsage, true);
+
+  const disabled = resolveProjectPolicy(root, {
+    [root]: { includeUsage: false },
+  });
+  assert.equal(disabled.includeUsage, false);
+
+  const unset = resolveProjectPolicy(root, {
+    [root]: { allowCommands: true },
+  });
+  assert.equal(unset.includeUsage, null);
 });
 
 test("resolveProjectPolicy: matches equivalent path forms", () => {

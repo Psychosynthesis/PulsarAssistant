@@ -6,6 +6,8 @@ type Traffic = {
   requests: number;
   sentBytes: number;
   receivedBytes: number;
+  inputTokens: number;
+  hasTokenUsage: boolean;
 };
 
 type BuiltinSessionNewDetail = {
@@ -16,10 +18,18 @@ type BuiltinSessionNewDetail = {
 type ApiTrafficDetail = BuiltinSessionNewDetail & {
   requestBytes: number;
   responseBytes: number;
+  inputTokens?: number;
+  outputTokens?: number;
 };
 
 function emptyTraffic(): Traffic {
-  return { requests: 0, sentBytes: 0, receivedBytes: 0 };
+  return {
+    requests: 0,
+    sentBytes: 0,
+    receivedBytes: 0,
+    inputTokens: 0,
+    hasTokenUsage: false,
+  };
 }
 
 function formatByteCount(bytes: number): string {
@@ -28,10 +38,23 @@ function formatByteCount(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (tokens >= 1_000) {
+    return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  return tokens.toString();
+}
+
 function formatTraffic(traffic: Traffic): string {
+  const tokensPart = traffic.hasTokenUsage
+    ? ` (${formatTokenCount(traffic.inputTokens)} tok)`
+    : "";
   return `${traffic.requests} req \u00b7 \u2191 ${formatByteCount(
     traffic.sentBytes,
-  )} \u00b7 \u2193 ${formatByteCount(traffic.receivedBytes)}`;
+  )}${tokensPart} \u00b7 \u2193 ${formatByteCount(traffic.receivedBytes)}`;
 }
 
 // Displays a compact per-panel API traffic summary in the header's More row.
@@ -82,6 +105,10 @@ export function attachTrafficSummary(view: PulsarAssistantView): Disposable {
     existing.requests += 1;
     existing.sentBytes += detail.requestBytes;
     existing.receivedBytes += detail.responseBytes;
+    if (typeof detail.inputTokens === "number") {
+      existing.inputTokens += detail.inputTokens;
+      existing.hasTokenUsage = true;
+    }
     bySession.set(detail.sessionId, existing);
     activeSessionId = detail.sessionId;
     render();

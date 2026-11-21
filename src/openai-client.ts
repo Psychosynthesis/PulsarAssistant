@@ -61,6 +61,8 @@ export type ChatEvent =
 export type OpenAiResponseUsage = {
   requestBytes: number;
   responseBytes: number;
+  inputTokens?: number;
+  outputTokens?: number;
 };
 
 export type OpenAiClientOptions = {
@@ -75,6 +77,9 @@ export type OpenAiClientOptions = {
   // added to the POST body. Some providers only stream model thoughts when
   // explicitly asked to.
   includeReasoning?: boolean | (() => boolean);
+  // When true (or when the resolver returns true), stream_options: { include_usage: true }
+  // is added to streaming Chat Completions requests so providers return token usage.
+  includeUsage?: boolean | (() => boolean);
 };
 
 export type OpenAiResponsesClientOptions = {
@@ -100,6 +105,7 @@ export type ChatClient = {
 export type OpenAiModelInfo = {
   id: string;
   description?: string;
+  contextLength?: number;
 };
 
 export type FetchOpenAiModelsOptions = {
@@ -137,6 +143,7 @@ type ChatCompletionChoice = {
 
 type ChatCompletionResponse = {
   choices?: ChatCompletionChoice[];
+  usage?: unknown;
   error?: { message?: string };
 };
 
@@ -144,6 +151,28 @@ type ModelsResponse = {
   data?: unknown;
   error?: { message?: string };
 };
+
+function extractTokenUsage(usage: unknown): {
+  inputTokens?: number;
+  outputTokens?: number;
+} {
+  if (!usage || typeof usage !== "object") return {};
+  const u = usage as Record<string, unknown>;
+  const rawIn = u.prompt_tokens ?? u.input_tokens;
+  const rawOut = u.completion_tokens ?? u.output_tokens;
+  const inputTokens =
+    typeof rawIn === "number" && Number.isFinite(rawIn) && rawIn >= 0
+      ? rawIn
+      : undefined;
+  const outputTokens =
+    typeof rawOut === "number" && Number.isFinite(rawOut) && rawOut >= 0
+      ? rawOut
+      : undefined;
+  return {
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+  };
+}
 
 function extractReasoning(obj: Record<string, unknown> | undefined): {
   reasoningText: string | null;
@@ -418,11 +447,9 @@ export class OpenAiChatClient {
   ): AsyncIterable<ChatEvent> {
     const { response, requestBytes } = await this.post(request, false, signal);
     const text = await response.text();
-    options.onResponse?.({
-      requestBytes,
-      responseBytes: utf8ByteLength(text),
-    });
+    const responseBytes = utf8ByteLength(text);
     if (!response.ok) {
+      options.onResponse?.({ requestBytes, responseBytes });
       throw new OpenAiHttpError(
         formatApiErrorMessage(response.status, text),
         response.status,
@@ -433,12 +460,18 @@ export class OpenAiChatClient {
     try {
       parsed = JSON.parse(text) as ChatCompletionResponse;
     } catch {
+      options.onResponse?.({ requestBytes, responseBytes });
       throw new OpenAiHttpError(
         `API returned non-JSON (${response.status})`,
         response.status,
         text,
       );
     }
+    options.onResponse?.({
+      requestBytes,
+      responseBytes,
+      ...extractTokenUsage(parsed.usage),
+    });
     const choice = parsed.choices?.[0];
     const message = choice?.message;
     const reasoningInfo = extractReasoning(
@@ -509,7 +542,11 @@ export class OpenAiChatClient {
     // never emit `data: [DONE]` and keep the connection open. `finish_reason`
     // is the protocol's own end-of-generation signal, so stop on it instead of
     // waiting for `[DONE]` and hanging forever.
+    const includeUsage = this.resolveIncludeUsage();
     let finishSeen = false;
+    let usageSeen = false;
+    let finishDeadline: number | null = null;
+    let usage: { inputTokens?: number; outputTokens?: number } = {};
     let receivedBytes = 0;
     const tagFilter = new StreamingTagFilter();
     for await (const payload of readSseData(
@@ -518,7 +555,8 @@ export class OpenAiChatClient {
       (bytes) => {
         receivedBytes += bytes;
       },
-      () => finishSeen,
+      () => finishSeen && (!includeUsage || usageSeen),
+      () => finishDeadline,
     )) {
       if (payload === "[DONE]") break;
       let parsed: ChatCompletionResponse;
@@ -526,6 +564,16 @@ export class OpenAiChatClient {
         parsed = JSON.parse(payload) as ChatCompletionResponse;
       } catch {
         continue;
+      }
+      if (parsed.usage) {
+        const extracted = extractTokenUsage(parsed.usage);
+        if (
+          extracted.inputTokens !== undefined ||
+          extracted.outputTokens !== undefined
+        ) {
+          usage = { ...usage, ...extracted };
+          usageSeen = true;
+        }
       }
       const choice = parsed.choices?.[0];
       if (!choice) continue;
@@ -558,7 +606,12 @@ export class OpenAiChatClient {
         if (part.function?.arguments) current.arguments += part.function.arguments;
         pending.set(index, current);
       }
-      if (choiceFinishReason) finishSeen = true;
+      if (choiceFinishReason) {
+        finishSeen = true;
+        if (includeUsage && !usageSeen && finishDeadline === null) {
+          finishDeadline = Date.now() + 500;
+        }
+      }
     }
     for (const item of tagFilter.flush()) {
       yield item;
@@ -574,8 +627,15 @@ export class OpenAiChatClient {
     options.onResponse?.({
       requestBytes,
       responseBytes: receivedBytes,
+      ...usage,
     });
     yield { type: "done", finishReason };
+  }
+
+  private resolveIncludeUsage(): boolean {
+    const value = this.options.includeUsage;
+    if (typeof value === "function") return value();
+    return value === true;
   }
 
   private resolveIncludeReasoning(): boolean {
@@ -613,6 +673,7 @@ export class OpenAiChatClient {
   ): Promise<{ response: Response; requestBytes: number }> {
     const url = completionsUrl(this.options.baseUrl);
     const includeReasoning = this.resolveIncludeReasoning();
+    const includeUsage = this.resolveIncludeUsage();
     const reasoningEffort = this.resolveReasoningEffort(request);
     const body = JSON.stringify({
       model: request.model,
@@ -624,6 +685,7 @@ export class OpenAiChatClient {
       ...(request.tools?.length ? { tools: request.tools } : {}),
       ...(request.tool_choice ? { tool_choice: request.tool_choice } : {}),
       stream,
+      ...(stream && includeUsage ? { stream_options: { include_usage: true } } : {}),
       ...(includeReasoning ? { include_reasoning: true } : {}),
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     });
@@ -797,11 +859,9 @@ export class OpenAiResponsesClient implements ChatClient {
   ): AsyncIterable<ChatEvent> {
     const { response, requestBytes } = await this.post(request, false, signal);
     const text = await response.text();
-    options.onResponse?.({
-      requestBytes,
-      responseBytes: utf8ByteLength(text),
-    });
+    const responseBytes = utf8ByteLength(text);
     if (!response.ok) {
+      options.onResponse?.({ requestBytes, responseBytes });
       throw new OpenAiHttpError(
         formatApiErrorMessage(response.status, text),
         response.status,
@@ -812,12 +872,18 @@ export class OpenAiResponsesClient implements ChatClient {
     try {
       parsed = JSON.parse(text) as ResponsesBody;
     } catch {
+      options.onResponse?.({ requestBytes, responseBytes });
       throw new OpenAiHttpError(
         `API returned non-JSON (${response.status})`,
         response.status,
         text,
       );
     }
+    options.onResponse?.({
+      requestBytes,
+      responseBytes,
+      ...extractTokenUsage((parsed as Record<string, unknown>).usage),
+    });
     if (parsed.error?.message) {
       throw new OpenAiHttpError(parsed.error.message, response.status, text);
     }
@@ -913,6 +979,7 @@ export class OpenAiResponsesClient implements ChatClient {
 
     let receivedBytes = 0;
     let finished = false;
+    let usage: { inputTokens?: number; outputTokens?: number } = {};
     const calls: ChatToolCall[] = [];
     const sources: WebSearchSource[] = [];
     const reasoningItems: ResponsesReasoningItem[] = [];
@@ -932,6 +999,20 @@ export class OpenAiResponsesClient implements ChatClient {
         parsed = JSON.parse(payload) as Record<string, unknown>;
       } catch {
         continue;
+      }
+      if (parsed.usage) {
+        usage = { ...usage, ...extractTokenUsage(parsed.usage) };
+      }
+      const respObj = parsed.response;
+      if (
+        respObj &&
+        typeof respObj === "object" &&
+        (respObj as Record<string, unknown>).usage
+      ) {
+        usage = {
+          ...usage,
+          ...extractTokenUsage((respObj as Record<string, unknown>).usage),
+        };
       }
       const type = typeof parsed.type === "string" ? parsed.type : "";
 
@@ -1010,6 +1091,7 @@ export class OpenAiResponsesClient implements ChatClient {
     options.onResponse?.({
       requestBytes,
       responseBytes: receivedBytes,
+      ...usage,
     });
     if (sources.length > 0) yield { type: "sources", sources };
     if (calls.length > 0) {
@@ -1134,7 +1216,20 @@ export async function fetchOpenAiModels(
       typeof item.description === "string" && item.description.trim() !== ""
         ? item.description.trim()
         : undefined;
-    models.push(description ? { id, description } : { id });
+    const rawCtx =
+      item.context_length ??
+      item.max_model_len ??
+      item.max_context_length ??
+      item.context_window;
+    const contextLength =
+      typeof rawCtx === "number" && Number.isFinite(rawCtx) && rawCtx > 1024
+        ? rawCtx
+        : undefined;
+    models.push({
+      id,
+      ...(description ? { description } : {}),
+      ...(contextLength !== undefined ? { contextLength } : {}),
+    });
   }
   if (models.length === 0) {
     throw new OpenAiModelsError("Model list is empty.", response.status, text);
@@ -1148,6 +1243,7 @@ async function* readSseData(
   signal: AbortSignal,
   onBytes?: (bytes: number) => void,
   stop?: () => boolean,
+  deadline?: () => number | null,
 ): AsyncIterable<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -1164,7 +1260,31 @@ async function* readSseData(
   try {
     outer: while (true) {
       if (signal.aborted || stop?.()) break;
-      const { done, value } = await reader.read();
+      const dl = deadline?.();
+      let readResult: ReadableStreamReadResult<Uint8Array>;
+      if (dl !== null && dl !== undefined) {
+        const remaining = dl - Date.now();
+        if (remaining <= 0) {
+          cancel();
+          break;
+        }
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timed = await Promise.race([
+          reader.read().then((r) => ({ kind: "read" as const, r })),
+          new Promise<{ kind: "timeout" }>((resolve) => {
+            timer = setTimeout(() => resolve({ kind: "timeout" }), remaining);
+          }),
+        ]);
+        if (timer !== undefined) clearTimeout(timer);
+        if (timed.kind === "timeout") {
+          cancel();
+          break;
+        }
+        readResult = timed.r;
+      } else {
+        readResult = await reader.read();
+      }
+      const { done, value } = readResult;
       if (signal.aborted) break;
       if (done) break;
       onBytes?.(value.byteLength);

@@ -10,6 +10,7 @@ export const MAX_TOOL_ITERATIONS = 300; // This is default
 export const DEFAULT_TOOL_CALL_DELAY_MS = 800;
 export const PINNED_FILES_LIMIT = 6;
 export const PINNED_FILE_MAX_LINES = 2000;
+export const DEFAULT_AUTO_PIN_THRESHOLD = 3;
 
 /**
  * Context output compaction interval (in number of tool calls).

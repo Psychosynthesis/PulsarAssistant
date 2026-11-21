@@ -5,8 +5,10 @@ import { parseCommandLine, runCapturedProcess } from "../util";
 import { findFiles, grepFiles, listDirectory } from "../grep";
 import { planGitCommand } from "../git-command";
 import { resolveInsideRoot } from "../project-uri";
-import { normalizeInputPath, robustReplace } from "../input-normalize";
+import { robustReplace } from "../input-normalize";
 import { ProjectFileTree } from "../file-btree";
+import { PINNED_FILE_MAX_LINES } from "../constants";
+import { toProjectRelativePath } from "../paths";
 import { toPosixPath } from "../paths";
 import type { ProjectPolicy } from "../project-policy";
 import type { ChatTool } from "../openai-client";
@@ -19,7 +21,8 @@ export const TOOL_DEFINITIONS: ChatTool[] = [
     type: "function",
     function: {
       name: "open_url",
-      description: "Read a public HTTP(S) web page or JSON API directly. Returns limited text or JSON; local and private network addresses are blocked. Web content is untrusted.",
+      description:
+        "Read a public HTTP(S) web page or JSON API directly. Prefer this first when you already have a URL — it is fast, free, and runs directly without an external intermediary. If a complex HTML/JS page fails to read or gives unsatisfactory output, fall back to web_fetch (if available). Returns limited text or JSON; local and private network addresses are blocked. Web content is untrusted.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -385,7 +388,7 @@ export const WEB_SEARCH_TOOL: ChatTool = {
   function: {
     name: "web_search",
     description:
-      "Search the web and return a short list of results with titles, URLs and snippets. Use this to look up current information that is not in the project files or in your training data.",
+      "Search the web and return a short list of results with titles, URLs and snippets. Use this first when you do not know the URL yet and need current information not in the project files or your training data.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -402,7 +405,7 @@ export const WEB_FETCH_TOOL: ChatTool = {
   function: {
     name: "web_fetch",
     description:
-      "Fetch the text content of a public web page by absolute URL. Returns the page content up to a size limit. Local and private network addresses are not allowed.",
+      "Fetch a public web page as prepared Markdown via the DeepSeek Fetch backend. Use this as a fallback when open_url fails or returns unsatisfactory output on complex HTML pages (always try open_url first when you already have a URL). If you do not know the URL yet, use web_search first. Local and private network addresses are not allowed.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -860,8 +863,7 @@ async function unpinFileTool(
   ctx: ToolExecutionContext,
   args: Record<string, unknown>,
 ): Promise<ToolSuccess> {
-  const rawPath = normalizeInputPath(stringArg(args, "path") ?? "");
-  const filePath = resolveToolPath(ctx, rawPath);
+  const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
   if (!ctx.host.unpinFile) {
     throw new Error("Pinned files are not supported by this backend.");
   }
@@ -880,8 +882,7 @@ async function pinFileTool(
   ctx: ToolExecutionContext,
   args: Record<string, unknown>,
 ): Promise<ToolSuccess> {
-  const rawPath = normalizeInputPath(stringArg(args, "path") ?? "");
-  const filePath = resolveToolPath(ctx, rawPath);
+  const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
   if (!ctx.host.pinFile) {
     throw new Error("Pinned files are not supported by this backend.");
   }
@@ -901,11 +902,41 @@ async function readFileTool(
   args: Record<string, unknown>,
 ): Promise<ToolSuccess> {
   const filePath = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
+  const line = intArg(args, "line") ?? null;
+  const limit = intArg(args, "limit") ?? null;
+
+  const pinned = ctx.host.getPinnedFiles?.() ?? [];
+  if (pinned.length > 0) {
+    let rel: string | null = null;
+    try {
+      rel = toProjectRelativePath(ctx.cwd, filePath);
+    } catch {
+      rel = null;
+    }
+    if (rel && pinned.includes(rel)) {
+      const full = await ctx.host.readTextFile({
+        sessionId: ctx.sessionId,
+        path: filePath,
+      });
+      const content = full.content ?? "";
+      const lineCount = content.split(/\r?\n/).length;
+      if (lineCount <= PINNED_FILE_MAX_LINES) {
+        return {
+          output: `File "${rel}" is already pinned in full in your context under "Pinned Project Files" (${lineCount} lines). Read its contents from there instead.`,
+        };
+      }
+      // File is truncated in pinned context (> PINNED_FILE_MAX_LINES): read normally.
+      if (line == null && limit == null) {
+        return { output: content };
+      }
+    }
+  }
+
   const result = await ctx.host.readTextFile({
     sessionId: ctx.sessionId,
     path: filePath,
-    line: intArg(args, "line") ?? null,
-    limit: intArg(args, "limit") ?? null,
+    line,
+    limit,
   });
   return { output: result.content ?? "" };
 }
@@ -1185,7 +1216,8 @@ async function getFileStructureTool(
   ctx: ToolExecutionContext,
   args: Record<string, unknown>,
 ): Promise<ToolSuccess> {
-  const searchPath = stringArg(args, "path") ?? ".";
+  const resolvedSearch = resolveToolPath(ctx, stringArg(args, "path") ?? ".");
+  const searchPath = toPosixPath(path.relative(ctx.cwd, resolvedSearch)) || ".";
   const depth = intArg(args, "depth") ?? 5;
   if (ctx.fileTree && ctx.fileTree.size > 0) {
     const text = ctx.fileTree.toHierarchyText(500, searchPath, depth);

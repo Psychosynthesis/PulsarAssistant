@@ -13,8 +13,10 @@ export type ProjectPolicy = {
   maxTurnRequests: number | null;
   toolCallDelayMs: number | null;
   toolOutputCompactInterval: number | null;
-  /** Auto-pin a file after this many read_file calls (0/null disables). */
+  /** Auto-pin a file after this many read_file calls (0 disables, null uses default). */
   autoPinThreshold: number | null;
+  /** Request streaming token usage (stream_options.include_usage). Defaults to true when null. */
+  includeUsage: boolean | null;
 };
 
 const DENY: ProjectPolicy = {
@@ -25,6 +27,7 @@ const DENY: ProjectPolicy = {
   toolCallDelayMs: null,
   toolOutputCompactInterval: null,
   autoPinThreshold: null,
+  includeUsage: null,
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -76,7 +79,9 @@ export function resolveProjectPolicy(
       maxTurnRequests: positiveInt(value.maxTurnRequests),
       toolCallDelayMs: positiveInt(value.toolCallDelayMs),
       toolOutputCompactInterval: nonNegativeInt(value.toolOutputCompactInterval),
-      autoPinThreshold: positiveInt(value.autoPinThreshold),
+      autoPinThreshold: nonNegativeInt(value.autoPinThreshold),
+      includeUsage:
+        typeof value.includeUsage === "boolean" ? value.includeUsage : null,
     };
   }
   return DENY;

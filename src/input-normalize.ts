@@ -1,15 +1,12 @@
 import * as path from "path";
 
-/**
- * Normalizes a raw input path provided by LLM agents.
- * Strips surrounding quotes, unescapes escaped slashes, normalizes backslashes,
- * removes duplicate slashes, and strips leading slashes if they are not part of an
- * absolute Windows drive path.
- */
-export function normalizeInputPath(raw: unknown): string {
-  if (typeof raw !== "string") return "";
+function cleanInputPath(raw: unknown): {
+  cleaned: string;
+  isWinDrive: boolean;
+} {
+  if (typeof raw !== "string") return { cleaned: "", isWinDrive: false };
   let p = raw.trim();
-  if (!p) return "";
+  if (!p) return { cleaned: "", isWinDrive: false };
 
   // Strip surrounding quotes if present (e.g. "path/to/file" or 'path/to/file')
   if (
@@ -31,6 +28,21 @@ export function normalizeInputPath(raw: unknown): string {
 
   // Collapse duplicate slashes (e.g. foo//bar -> foo/bar)
   p = p.replace(/\/+/g, "/");
+
+  return { cleaned: p, isWinDrive };
+}
+
+/**
+ * Normalizes a raw input path provided by LLM agents.
+ * Strips surrounding quotes, unescapes escaped slashes, normalizes backslashes,
+ * removes duplicate slashes, and strips leading slashes if they are not part of an
+ * absolute Windows drive path.
+ */
+export function normalizeInputPath(raw: unknown): string {
+  const { cleaned, isWinDrive } = cleanInputPath(raw);
+  if (!cleaned) return "";
+
+  let p = cleaned;
 
   // If it's not a Windows absolute drive path and starts with a slash,
   // models almost always mean relative to the project root (/src/foo -> src/foo)
@@ -69,17 +81,39 @@ export function normalizeSearchText(raw: unknown): string {
  * and strips root-relative leading slashes.
  */
 export function resolveSafeProjectPath(cwd: string, requested: unknown): string {
-  const norm = normalizeInputPath(requested);
-  if (!norm || norm === ".") {
+  const { cleaned } = cleanInputPath(requested);
+  if (!cleaned || cleaned === ".") {
     return path.resolve(cwd);
   }
 
   const root = path.resolve(cwd);
+  const isWindows = process.platform === "win32";
+  const normRoot = isWindows ? root.toLowerCase() : root;
+
+  // On POSIX, if the model passes an absolute path that already lies inside the
+  // project root (e.g. /home/dev/project/src/index.ts), accept it directly
+  // instead of stripping the leading slash and doubling the root prefix.
+  // Any other leading-slash path (e.g. /src/index.ts) is treated as relative to
+  // the project root — never as access to the host filesystem root.
+  if (!isWindows && cleaned.startsWith("/")) {
+    const absCandidate = path.resolve(cleaned);
+    const candidateRel = path.relative(normRoot, absCandidate);
+    if (
+      candidateRel === "" ||
+      (!candidateRel.startsWith("..") && !path.isAbsolute(candidateRel))
+    ) {
+      return absCandidate;
+    }
+  }
+
+  const norm = normalizeInputPath(requested);
+  if (!norm || norm === ".") {
+    return root;
+  }
+
   const target = path.isAbsolute(norm) ? path.resolve(norm) : path.resolve(root, norm);
 
   // Compare paths with respect to Windows case-insensitivity
-  const isWindows = process.platform === "win32";
-  const normRoot = isWindows ? root.toLowerCase() : root;
   const normTarget = isWindows ? target.toLowerCase() : target;
 
   const rel = path.relative(normRoot, normTarget);

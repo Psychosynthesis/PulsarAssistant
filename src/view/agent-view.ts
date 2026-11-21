@@ -32,6 +32,8 @@ import {
   setAgentIncludeReasoning,
   setAgentReasoningEffort,
   setAgentWebSearch,
+  setProjectAutoPinThreshold,
+  setProjectIncludeUsage,
   setProjectMaxTurnRequests,
   setProjectBuildCommand,
   setProjectTestCommand,
@@ -45,6 +47,11 @@ import {
 } from "./config-selector";
 import { ModelSelector } from "./model-selector";
 import { ContextProgressBar } from "./context-progress-bar";
+import { BalanceIndicator } from "./components/balance-indicator";
+import {
+  fetchProviderBalance,
+  supportsProviderBalance,
+} from "../provider-balance";
 import { renderMarkdownHtml } from "./markdown";
 import { ComposerStatusBar } from "./components/composer-status-bar";
 import { PlanBarView } from "./components/plan-bar-view";
@@ -55,6 +62,7 @@ import {
   TestCommandModal,
   BuildCommandModal,
 } from "./components/test-command-modal";
+import { AutoPinThresholdModal } from "./components/auto-pin-threshold-modal";
 import { ProxyModal } from "./components/proxy-modal";
 import { SessionListView } from "./components/session-list-view";
 import { SlashComposer } from "./components/slash-composer";
@@ -80,7 +88,17 @@ import {
   type ProjectSessionEntry,
 } from "../session/project-sessions";
 import type { AgentStatusReporter } from "./status-indicator";
-import { estimateSessionTokens, resolveContextWindow } from "../token-estimate";
+import {
+  estimateSessionTokens,
+  estimateTokens,
+  estimateToolsTokens,
+  resolveContextWindow,
+} from "../token-estimate";
+import {
+  toolsForPolicy,
+  WEB_FETCH_TOOL,
+  WEB_SEARCH_TOOL,
+} from "../builtin/tools";
 import {
   buildErrorElement,
   createElement,
@@ -172,6 +190,9 @@ export class PulsarAssistantView {
   private modelSelectorWrap!: HTMLElement;
   private modelSelector!: ModelSelector;
   private contextProgressBar!: ContextProgressBar;
+  private balanceIndicator!: BalanceIndicator;
+  private balanceFetchController: AbortController | null = null;
+  private balanceFetchGeneration = 0;
   private sessionListView!: SessionListView;
   private chatPlaceholder!: ChatPlaceholderView;
   private settingsView!: AgentSettingsView;
@@ -217,6 +238,8 @@ export class PulsarAssistantView {
   private pinnedFilesPanel!: PinnedFilesView;
   private includeReasoningCheckbox!: HTMLInputElement;
   private requestReasoningCheckbox!: HTMLInputElement;
+  private includeUsageCheckbox!: HTMLInputElement;
+  private lastApiUsage: { sessionId: string; inputTokens: number } | null = null;
 
   private streamRole: string | null = null;
   private streamMessageId: acp.MessageId | null = null;
@@ -224,6 +247,7 @@ export class PulsarAssistantView {
   private streamRawText = "";
   private streamRenderHandle: number | null = null;
   private currentTurnThought = "";
+  private messageRawMarkdown = new WeakMap<HTMLElement, string>();
 
   private subscriptions = new CompositeDisposable();
   private eventSubscription!: Disposable;
@@ -265,6 +289,7 @@ export class PulsarAssistantView {
     this.renderModelSelector();
     this.settingsView.refresh();
     this.refreshRequestReasoning();
+    this.refreshIncludeUsage();
     this.updateInputControls();
   }
 
@@ -275,6 +300,18 @@ export class PulsarAssistantView {
     this.requestReasoningCheckbox.checked = openai
       ? openai.includeReasoning !== false
       : true;
+  }
+
+  private refreshIncludeUsage(): void {
+    const target = this.activeTarget;
+    const isOpenai = target?.kind === "openai";
+    this.includeUsageCheckbox.disabled = !isOpenai;
+    if (!isOpenai) {
+      this.includeUsageCheckbox.checked = false;
+      return;
+    }
+    const policy = readProjectPolicy(this.projectRoot);
+    this.includeUsageCheckbox.checked = policy.includeUsage ?? true;
   }
 
   private generatingIndicator: HTMLElement | null = null;
@@ -369,7 +406,11 @@ export class PulsarAssistantView {
       ),
       atom.config.onDidChange("pulsar-assistant.modelContextWindows", () => {
         this.updateContextProgress();
-      this.updateInputControls();
+        this.updateInputControls();
+      }),
+      atom.config.onDidChange("pulsar-assistant.projects", () => {
+        this.refreshIncludeUsage();
+        this.updateContextProgress();
       }),
     );
 
@@ -379,9 +420,22 @@ export class PulsarAssistantView {
         sessionId?: string;
         requestBytes: number;
         responseBytes: number;
+        inputTokens?: number;
+        outputTokens?: number;
       }>;
       if (!custom.detail || custom.detail.projectRoot !== this.projectRoot) {
         return;
+      }
+      if (
+        typeof custom.detail.inputTokens === "number" &&
+        custom.detail.sessionId &&
+        custom.detail.sessionId === this.session.sessionId
+      ) {
+        this.lastApiUsage = {
+          sessionId: custom.detail.sessionId,
+          inputTokens: custom.detail.inputTokens,
+        };
+        this.updateContextProgress();
       }
       this.updateLiveStatusTraffic();
     };
@@ -517,8 +571,11 @@ export class PulsarAssistantView {
     }
     this.renderModelSelector();
     this.settingsView.refresh();
+    this.refreshRequestReasoning();
+    this.refreshIncludeUsage();
     this.updateContextProgress();
     this.updateInputControls();
+    void this.refreshBalance();
     if (this.infoPanelOpen) this.renderInfoPanel();
     this.renderLiveRow();
     if (this.isShown && !this.session.sessionId && !this.session.running) {
@@ -530,12 +587,61 @@ export class PulsarAssistantView {
     const isOpenai = this.activeTarget?.kind === "openai";
     this.contextProgressBar.setVisible(isOpenai);
     if (!isOpenai) return;
-    const messages = this.session.getSessionMessages();
     const pendingText = this.input ? this.input.value : "";
     const currentModel = this.currentModelId() || "gpt-4o";
-    const used = estimateSessionTokens(messages, pendingText);
-    const max = resolveContextWindow(currentModel);
-    this.contextProgressBar.update(used, max);
+    const customWindows = atom.config.get(
+      "pulsar-assistant.modelContextWindows",
+    ) as Record<string, number> | undefined;
+    const modelInfo = this.modelList?.find((m) => m.id === currentModel);
+    const max = resolveContextWindow(
+      currentModel,
+      customWindows,
+      modelInfo?.contextLength
+        ? { context_length: modelInfo.contextLength }
+        : undefined,
+    );
+
+    const sessionId = this.session.sessionId;
+    if (
+      this.lastApiUsage &&
+      sessionId &&
+      this.lastApiUsage.sessionId === sessionId
+    ) {
+      const draftTokens =
+        pendingText.trim().length > 0 ? 4 + estimateTokens(pendingText) : 0;
+      this.contextProgressBar.update(
+        this.lastApiUsage.inputTokens + draftTokens,
+        max,
+        "api",
+      );
+      return;
+    }
+
+    const messages = this.session.getSessionMessages();
+    const policy = readProjectPolicy(this.projectRoot);
+    const tools = toolsForPolicy(policy);
+    if (this.activeTarget?.kind === "openai") {
+      const target = this.activeTarget;
+      let isDeepSeek = false;
+      try {
+        isDeepSeek = new URL(target.baseUrl).hostname === "api.deepseek.com";
+      } catch {
+        // ignore
+      }
+      const useLocalSearch =
+        target.webSearch === "local" ||
+        (target.webSearch === "auto" &&
+          target.apiFormat !== "responses" &&
+          isDeepSeek);
+      if (useLocalSearch) {
+        tools.push(WEB_SEARCH_TOOL, WEB_FETCH_TOOL);
+      }
+    }
+    const used = estimateSessionTokens(messages, pendingText, {
+      pinnedTokens: this.session.getPinnedTokensEstimate(),
+      toolTokens: estimateToolsTokens(tools),
+    });
+    this.contextProgressBar.update(used, max, "estimated");
   }
 
   private currentModelId(): string | null {
@@ -801,6 +907,11 @@ export class PulsarAssistantView {
     this.contextProgressBar = new ContextProgressBar();
     row1.appendChild(this.contextProgressBar.element);
 
+    this.balanceIndicator = new BalanceIndicator(() => {
+      void this.refreshBalance();
+    });
+    row1.appendChild(this.balanceIndicator.element);
+
     const onModelDocClick = (event: MouseEvent) => {
       if (
         this.modelSelector?.isOpen &&
@@ -881,6 +992,7 @@ export class PulsarAssistantView {
       },
       openBuildCommand: () => this.openBuildCommandModal(),
       openTestCommand: () => this.openTestCommandModal(),
+      openAutoPinThreshold: () => this.openAutoPinThresholdModal(),
       openProxySettings: () => this.openProxyModal(),
       editConfiguration: () =>
         atom.commands.dispatch(this.element, "pulsar-assistant:edit-agents"),
@@ -1078,8 +1190,26 @@ export class PulsarAssistantView {
       }),
     );
 
+    this.includeUsageCheckbox = createElement("input");
+    this.includeUsageCheckbox.type = "checkbox";
+    this.includeUsageCheckbox.addEventListener("change", () => {
+      setProjectIncludeUsage(this.projectRoot, this.includeUsageCheckbox.checked);
+    });
+    const includeUsageLabel = createElement("label", {
+      class: "pulsar-assistant-include-usage",
+    });
+    includeUsageLabel.appendChild(this.includeUsageCheckbox);
+    includeUsageLabel.appendChild(document.createTextNode("Include usage"));
+    this.subscriptions.add(
+      atom.tooltips.add(includeUsageLabel, {
+        title:
+          "Request token usage in streaming Chat Completions (stream_options.include_usage). Per-project setting; enabled by default for OpenAI-compatible agents.",
+      }),
+    );
+
     actionButtons.appendChild(includeReasoningLabel);
     actionButtons.appendChild(requestReasoningLabel);
+    actionButtons.appendChild(includeUsageLabel);
     actionButtons.appendChild(this.followButton);
     actionButtons.appendChild(this.stopButton);
     actionButtons.appendChild(this.sendButton);
@@ -1684,6 +1814,7 @@ export class PulsarAssistantView {
   }
 
   private resetSessionForRelaunch(): void {
+    this.lastApiUsage = null;
     this.subscriptions.remove(this.eventSubscription);
     this.session.dispose();
     this.session = new AgentSession(this.projectRoot);
@@ -1780,6 +1911,7 @@ export class PulsarAssistantView {
     } else {
       this.resetModelState();
     }
+    void this.refreshBalance();
     this.setLifecycleStatus(`Starting ${target.name}\u2026`);
     this.refreshControls();
 
@@ -1941,6 +2073,17 @@ export class PulsarAssistantView {
     });
   }
 
+  private openAutoPinThresholdModal(): void {
+    const policy = readProjectPolicy(this.projectRoot);
+    AutoPinThresholdModal.show({
+      projectRoot: this.projectRoot,
+      currentThreshold: policy.autoPinThreshold,
+      onSave: (threshold) => {
+        setProjectAutoPinThreshold(this.projectRoot, threshold);
+      },
+    });
+  }
+
   private openProxyModal(): void {
     const current =
       atom.config.get<string>("pulsar-assistant.proxyUrl") ?? null;
@@ -2019,6 +2162,7 @@ export class PulsarAssistantView {
 
   private startNewSession(): void {
     if (this.session.running || this.session.switching) return;
+    this.lastApiUsage = null;
     this.sessionListView.close();
     this.stashActiveSessionLiveState();
     const currentId = this.session.sessionId;
@@ -2088,6 +2232,7 @@ export class PulsarAssistantView {
   private switchToSession(id: string, cwd?: string): void {
     if (this.session.running || this.session.switching) return;
     if (id === this.session.sessionId) return;
+    this.lastApiUsage = null;
     this.sessionListView.close();
     this.stashActiveSessionLiveState();
     const currentId = this.session.sessionId;
@@ -2240,6 +2385,7 @@ export class PulsarAssistantView {
         this.renderModelSelector();
         this.updateContextProgress();
         this.updateInputControls();
+        void this.refreshBalance();
         break;
       case "turn-start":
         this.slashComposer.close();
@@ -2267,10 +2413,13 @@ export class PulsarAssistantView {
         this.session.refreshSessionList();
         this.updateContextProgress();
         this.statusBar.clear();
+        void this.refreshBalance();
         break;
       case "pinned-files-changed":
+        this.lastApiUsage = null;
         this.renderPinnedFiles();
         this.toolCallManager.refreshPinStates();
+        this.updateContextProgress();
         break;
       case "update":
         this.handleUpdate(event.sessionId, event.update);
@@ -2415,6 +2564,7 @@ export class PulsarAssistantView {
       this.streamMessageId = streamMessageId;
     }
     this.streamRawText += text;
+    this.messageRawMarkdown.set(this.streamBody, this.streamRawText);
     this.scheduleStreamRender();
     this.scrollToBottom();
   }
@@ -2476,13 +2626,21 @@ export class PulsarAssistantView {
     };
     label.textContent = labels[role] || role;
 
-    header.appendChild(label);
-    if (messageId && (role === "user" || role === "agent")) {
-      header.appendChild(this.buildDeleteButton("message", messageId));
-    }
-
     const body = createElement("div", { class: "pulsar-assistant-message-body" });
     body.textContent = text;
+    this.messageRawMarkdown.set(body, text);
+
+    header.appendChild(label);
+    if (role === "user" || role === "agent") {
+      const actions = createElement("div", {
+        class: "pulsar-assistant-message-actions",
+      });
+      actions.appendChild(this.buildCopyButton(body));
+      if (messageId) {
+        actions.appendChild(this.buildDeleteButton("message", messageId));
+      }
+      header.appendChild(actions);
+    }
 
     message.appendChild(header);
     message.appendChild(body);
@@ -2505,6 +2663,30 @@ export class PulsarAssistantView {
       }
       body.appendChild(strip);
     }
+  }
+
+  private buildCopyButton(body: HTMLElement): HTMLButtonElement {
+    const button = createElement("button", {
+      class: ["icon", "icon-clippy", "pulsar-assistant-item-copy"],
+    }) as HTMLButtonElement;
+    button.type = "button";
+    button.title = "Copy raw Markdown";
+    button.setAttribute("aria-label", "Copy raw Markdown");
+    let resetTimer: ReturnType<typeof setTimeout> | null = null;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const raw = this.messageRawMarkdown.get(body) ?? body.textContent ?? "";
+      atom.clipboard.write(raw);
+      button.classList.remove("icon-clippy");
+      button.classList.add("icon-check", "is-copied");
+      if (resetTimer !== null) clearTimeout(resetTimer);
+      resetTimer = setTimeout(() => {
+        resetTimer = null;
+        button.classList.remove("icon-check", "is-copied");
+        button.classList.add("icon-clippy");
+      }, 1500);
+    });
+    return button;
   }
 
   private buildDeleteButton(
@@ -2565,6 +2747,7 @@ export class PulsarAssistantView {
     } else {
       this.findItemElement("message", id)?.remove();
     }
+    this.lastApiUsage = null;
     this.updateContextProgress();
     this.updateChatPlaceholder();
   }
@@ -2935,9 +3118,11 @@ export class PulsarAssistantView {
     this.onPanelShown();
     const target = this.activeTarget;
     if (!target) {
+      this.balanceIndicator.setBalance(null);
       this.renderNoAgentIdle();
       return;
     }
+    void this.refreshBalance();
     this.setLifecycleStatus(`Starting ${target.name}\u2026`);
     this.updateInputControls();
     this.session
@@ -2965,6 +3150,7 @@ export class PulsarAssistantView {
           5000,
         );
       } else if (result.compactedCount > 0) {
+        this.lastApiUsage = null;
         this.statusBar.setText(
           `Removed ${result.compactedCount} tool call${result.compactedCount === 1 ? "" : "s"} and results from the conversation context.`,
           5000,
@@ -2983,7 +3169,52 @@ export class PulsarAssistantView {
     }
   }
 
+  private async refreshBalance(): Promise<void> {
+    this.balanceFetchController?.abort();
+    this.balanceFetchController = null;
+    const generation = ++this.balanceFetchGeneration;
+    const target = this.activeTarget;
+    if (
+      !target ||
+      target.kind !== "openai" ||
+      !supportsProviderBalance(target.baseUrl)
+    ) {
+      this.balanceIndicator.setBalance(null);
+      return;
+    }
+    const controller = new AbortController();
+    this.balanceFetchController = controller;
+    try {
+      const fetch = createProxyFetch(() =>
+        atom.config.get("pulsar-assistant.proxyUrl"),
+      );
+      const balance = await fetchProviderBalance({
+        baseUrl: target.baseUrl,
+        apiKey: target.apiKey,
+        signal: controller.signal,
+        fetch,
+      });
+      if (
+        generation !== this.balanceFetchGeneration ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+      this.balanceIndicator.setBalance(balance);
+    } catch {
+      if (
+        generation !== this.balanceFetchGeneration ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+      this.balanceIndicator.setBalance(null);
+    }
+  }
+
   destroy(): void {
+    this.balanceFetchController?.abort();
+    this.balanceIndicator.dispose();
     this.statusReporter?.clear(this);
     this.permissionManager.removeAuthCard();
     this.toolCallManager.clear();

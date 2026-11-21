@@ -4,6 +4,7 @@ import {
   ProjectFileTree,
   toPosixPath,
 } from "../file-btree";
+import { toProjectRelativePath } from "../paths";
 import {
   getProjectStorageDir,
   getProjectTreePath,
@@ -168,8 +169,19 @@ export class ProjectFileTreeManager {
    * Returns the new read count (0 when the file is not indexed).
    */
   async recordFileRead(filePath: string): Promise<number> {
-    const rel = toPosixPath(path.relative(this.projectRoot, filePath));
-    const count = this.fileTree.incrementReadCount(rel);
+    await this.ensureInitialized();
+    let rel: string;
+    try {
+      rel = toProjectRelativePath(this.projectRoot, filePath);
+    } catch {
+      return 0;
+    }
+    let count = this.fileTree.incrementReadCount(rel);
+    if (count === 0) {
+      // File may have been created after the initial scan; index it on demand.
+      await this.fileTree.updatePath(filePath);
+      count = this.fileTree.incrementReadCount(rel);
+    }
     if (count > 0) {
       this.scheduleTreeSave();
     }

@@ -166,6 +166,7 @@ By default, the builtin agent has no terminal access. To allow `run_command` or
         testCommand: "npm test"  # exact test command run by run_tests
         maxTurnRequests: 200     # optional; maximum tool calls in one turn (default: 300, max: 1000)
         autoPinThreshold: 3      # optional; auto-pin a file after this many read_file calls
+        includeUsage: true       # optional; send stream_options.include_usage (default: true)
 ```
 
 `allowCommands` is a boolean. `testCommand` is the exact command line
@@ -174,10 +175,11 @@ By default, the builtin agent has no terminal access. To allow `run_command` or
 Keys are absolute project roots. The **Tool turns** input in the panel edits
 `maxTurnRequests` for the current project.
 
-`autoPinThreshold` is a positive integer: once the agent has called `read_file`
-on a file that many times, the file is pinned automatically. Read counts are
-kept per file in the project's `tree.json`; manually pinned files are permanent
-and are never evicted automatically.
+`autoPinThreshold` defaults to `3` and can be set per project via the gear menu
+(**Set auto-pin threshold…**) or in `config.cson`: once the agent has called
+`read_file` on a file that many times, the file is pinned automatically
+(set `0` to disable). Read counts are kept per file in the project's `tree.json`;
+manually pinned files are permanent and are never evicted automatically.
 
 ### HTTP(S) proxy
 

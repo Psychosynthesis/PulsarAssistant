@@ -23,25 +23,36 @@ const BLOCKED_ANYWHERE = new Set([
   "-o",
 ]);
 
-const BRANCH_MUTATING = new Set([
-  "-m",
-  "--move",
-  "-c",
-  "--copy",
-  "-d",
-  "--delete",
-  "--track",
-  "--no-track",
+const BRANCH_BLOCKED_LONG = new Set(["--force", "--edit-description"]);
+const BRANCH_BLOCKED_SHORT = new Set(["D", "M", "C", "f"]);
+
+const BRANCH_READ_LONG_NO_VALUE = new Set([
+  "--all",
+  "--remotes",
+  "--verbose",
+  "--quiet",
+  "--ignore-case",
+  "--list",
+  "--show-current",
+  "--no-abbrev",
+  "--no-column",
+  "--no-color",
 ]);
 
-const BRANCH_BLOCKED = new Set([
-  "-M",
-  "-C",
-  "-D",
-  "-f",
-  "--force",
-  "--edit-description",
+const BRANCH_READ_LONG_WITH_OPT_VALUE = new Set([
+  "--contains",
+  "--no-contains",
+  "--merged",
+  "--no-merged",
+  "--points-at",
+  "--abbrev",
+  "--column",
+  "--color",
+  "--sort",
+  "--format",
 ]);
+
+const BRANCH_READ_SHORT = new Set(["a", "r", "v", "q", "i", "l"]);
 
 const APPLY_READ_FLAGS = new Set([
   "--check",
@@ -66,6 +77,7 @@ function flagName(token: string): string {
 
 function hasCommitMessage(argv: string[]): boolean {
   for (const token of argv) {
+    if (token === "--") break;
     if (token === "-m" || token === "--message") return true;
     if (token.startsWith("--message=")) return true;
     if (/^-.*m/.test(token) && !token.startsWith("--")) return true;
@@ -73,18 +85,68 @@ function hasCommitMessage(argv: string[]): boolean {
   return false;
 }
 
-function branchNeedsPermission(args: string[]): boolean {
+function analyzeBranchArgs(args: string[]): { needsPermission: boolean } {
   const tokens = args.slice(1);
-  if (tokens.some((token) => BRANCH_MUTATING.has(flagName(token)))) {
-    return true;
+  let needsPermission = false;
+  let hasListFlag = false;
+  let positionalCount = 0;
+
+  for (let idx = 0; idx < tokens.length; idx += 1) {
+    const token = tokens[idx];
+    if (token === "--") {
+      positionalCount += tokens.length - idx - 1;
+      break;
+    }
+
+    if (token.startsWith("--")) {
+      const eqIdx = token.indexOf("=");
+      const name = eqIdx >= 0 ? token.slice(0, eqIdx) : token;
+      if (BRANCH_BLOCKED_LONG.has(name)) {
+        throw new Error(`git branch option ${name} is not allowed.`);
+      }
+      if (name === "--list") {
+        hasListFlag = true;
+        continue;
+      }
+      if (BRANCH_READ_LONG_NO_VALUE.has(name)) {
+        if (eqIdx >= 0) needsPermission = true;
+        continue;
+      }
+      if (BRANCH_READ_LONG_WITH_OPT_VALUE.has(name)) {
+        if (eqIdx < 0) {
+          const next = tokens[idx + 1];
+          if (next !== undefined && next !== "--" && !next.startsWith("-")) {
+            idx += 1;
+          }
+        }
+        continue;
+      }
+      needsPermission = true;
+      continue;
+    }
+
+    if (token.startsWith("-") && token.length > 1) {
+      for (const ch of token.slice(1)) {
+        if (BRANCH_BLOCKED_SHORT.has(ch)) {
+          throw new Error(`git branch option -${ch} is not allowed.`);
+        }
+        if (ch === "l") {
+          hasListFlag = true;
+        } else if (!BRANCH_READ_SHORT.has(ch)) {
+          needsPermission = true;
+        }
+      }
+      continue;
+    }
+
+    positionalCount += 1;
   }
-  // `git branch <name> [<start-point>]` creates a branch. Any subcommand flag
-  // makes this a read-only listing/filter form, so only bare positional args
-  // count as a create request.
-  return (
-    tokens.length > 0 &&
-    tokens.every((token) => !token.startsWith("-") && token !== "--")
-  );
+
+  if (positionalCount > 0 && !hasListFlag) {
+    needsPermission = true;
+  }
+
+  return { needsPermission };
 }
 
 function applyNeedsPermission(args: string[]): boolean {
@@ -108,17 +170,25 @@ export function planGitCommand(argv: string[]): GitPlan {
   }
 
   for (const token of argv) {
+    if (token === "--") break;
     const flag = flagName(token);
     if (BLOCKED_ANYWHERE.has(flag)) {
       throw new Error(`git option ${flag} is not allowed.`);
+    }
+    if (!token.startsWith("--") && token.startsWith("-o") && token.length > 2) {
+      throw new Error("git option -o is not allowed.");
     }
   }
 
   let i = 0;
   while (i < argv.length && argv[i].startsWith("-")) {
-    const flag = flagName(argv[i]);
-    if (flag === "-C" || flag === "-c") {
-      throw new Error(`git option ${flag} is not allowed.`);
+    const token = argv[i];
+    const flag = flagName(token);
+    if (flag === "-C" || (!token.startsWith("--") && token.startsWith("-C"))) {
+      throw new Error("git option -C is not allowed.");
+    }
+    if (flag === "-c" || (!token.startsWith("--") && token.startsWith("-c"))) {
+      throw new Error("git option -c is not allowed.");
     }
     i += 1;
   }
@@ -137,14 +207,17 @@ export function planGitCommand(argv: string[]): GitPlan {
 
   const commandArgs = argv.slice(i);
 
+  let branchNeedsPerm = false;
   if (sub === "branch") {
-    const blocked = commandArgs.find((token) =>
-      BRANCH_BLOCKED.has(flagName(token)),
-    );
-    if (blocked) {
-      throw new Error(
-        `git branch option ${flagName(blocked)} is not allowed.`,
-      );
+    branchNeedsPerm = analyzeBranchArgs(commandArgs).needsPermission;
+  }
+
+  if (sub === "diff" || sub === "log" || sub === "show") {
+    for (const token of commandArgs.slice(1)) {
+      if (token === "--") break;
+      if (!token.startsWith("--") && token.startsWith("-") && token.slice(1).includes("o")) {
+        throw new Error("git option -o is not allowed.");
+      }
     }
   }
 
@@ -172,7 +245,7 @@ export function planGitCommand(argv: string[]): GitPlan {
     args: argv,
     needsPermission:
       WRITE.has(sub) ||
-      (sub === "branch" && branchNeedsPermission(commandArgs)) ||
+      branchNeedsPerm ||
       (sub === "apply" && applyNeedsPermission(commandArgs)),
     title: `git ${argv.join(" ")}`,
   };

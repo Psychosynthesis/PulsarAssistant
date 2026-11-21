@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] - 2026-11-22
+
+- **Provider balance indicator**: displays `Баланс: ...` next to the
+  context progress bar for DeepSeek, Moonshot AI (Kimi), and OpenRouter
+  agents, refreshing after turns and on click.
+- **Message copy button**: added a copy button next to delete in user and
+  agent message headers to copy the raw Markdown source to the clipboard.
+- **Pinned files handling**: pinning a file (manually or via auto-pin)
+  immediately compacts its prior `read_file` outputs in the active session
+  history to `[Pinned to context: <name>]`; calling `read_file` on a file
+  pinned in full (≤ 2000 lines) directs the model to the pinned context
+  instead of re-reading it.
+- **POSIX path resolution**: `resolveSafeProjectPath()` now preserves valid
+  project-absolute POSIX paths instead of stripping the leading slash and
+  doubling the project root prefix, while keeping all paths confined to the
+  project root.
+- **DeepSeek `web_fetch` & tool priority**: `deepseekFetch()` now reads root
+  `title`/`content` fields (falling back to `data`), and tool descriptions /
+  system prompt instruct the agent to prefer `open_url` first when a URL is
+  known and fall back to `web_fetch`.
+- **Git branch hardening**: `planGitCommand()` now inspects combined short
+  flags (such as `-Dv`) and uses a strict read-only allowlist for `git branch`
+  so mutating options like `--set-upstream-to` and branch creation with read
+  flags require permission.
+- **Auto-pin threshold & modal**: `autoPinThreshold` now defaults to `3`
+  (set `0` to disable), waits for file tree initialization before recording
+  reads, and can be configured per project via **Set auto-pin threshold…** in
+  the project settings menu.
+- **Context & token usage tracking**:
+  - OpenAI-compatible Chat Completions (`stream_options.include_usage`,
+    controlled by a new per-project **Include usage** checkbox enabled by
+    default) and Responses API now report `inputTokens` / `outputTokens` in
+    `pulsar-assistant:api-traffic`.
+  - The header traffic summary shows cumulative input tokens in parentheses
+    next to sent bytes (`↑ … (… tok)`), and the context progress bar uses
+    the latest API `inputTokens` directly (falling back to local estimation)
+    and shows `API usage` vs `estimated` in its tooltip.
+  - Local fallback estimation (`estimateSessionTokens`) now includes pinned
+    files, tool schemas, and `responses_reasoning_items`, uses adjusted
+    ASCII/non-ASCII ratios (`3.0` / `1.2`), and passes
+    `pulsar-assistant.modelContextWindows` and `/models` metadata to
+    `resolveContextWindow()`.
+
 ## [0.9.5] - 2026-11-17
 
 - **`open_url` JSON support**: the tool now also returns JSON responses

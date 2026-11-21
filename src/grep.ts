@@ -1,7 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
 import { resolveInsideRoot } from "./project-uri";
-import { normalizeInputPath } from "./input-normalize";
 import {
   buildIgnoredDirsSet,
   getConfiguredIgnoredDirs,
@@ -207,8 +206,7 @@ async function walkFiles(
 
 export async function findFiles(options: FindFilesOptions): Promise<string[]> {
   const cwd = path.resolve(options.cwd);
-  const normalizedSearch = normalizeInputPath(options.searchPath ?? ".");
-  const searchRoot = resolveInsideRoot(cwd, normalizedSearch || ".");
+  const searchRoot = resolveInsideRoot(cwd, options.searchPath ?? ".");
   const skipDirs = options.skipDirs ?? getConfiguredIgnoredDirs();
   const maxResults = Math.max(
     1,
@@ -249,8 +247,7 @@ export async function findFiles(options: FindFilesOptions): Promise<string[]> {
 
 export async function grepFiles(options: GrepOptions): Promise<GrepMatch[]> {
   const cwd = path.resolve(options.cwd);
-  const normalizedSearch = normalizeInputPath(options.searchPath ?? ".");
-  const searchRoot = resolveInsideRoot(cwd, normalizedSearch || ".");
+  const searchRoot = resolveInsideRoot(cwd, options.searchPath ?? ".");
   const skipDirs = options.skipDirs ?? getConfiguredIgnoredDirs();
   const maxResults = Math.max(
     1,

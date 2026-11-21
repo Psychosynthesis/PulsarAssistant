@@ -1,4 +1,5 @@
 import type { StoredContextMessage } from "./session-storage";
+import type { ChatTool } from "./openai-client";
 
 /**
  * Built-in context window sizes for well-known model families.
@@ -48,8 +49,8 @@ export const FALLBACK_CONTEXT_WINDOW = 128_000;
 
 /**
  * Fast weighted character-level token count estimation without external dependencies.
- * - ASCII characters (Latin, digits, punctuation, whitespace, code): ~3.7 chars / token.
- * - Non-ASCII characters (Cyrillic, CJK, multibyte Unicode): ~1.5 chars / token.
+ * - ASCII characters (Latin, digits, punctuation, whitespace, code/JSON): ~3.0 chars / token.
+ * - Non-ASCII characters (Cyrillic, CJK, multibyte Unicode): ~1.2 chars / token.
  */
 export function estimateTokens(text: string): number {
   if (!text || text.length === 0) return 0;
@@ -62,16 +63,31 @@ export function estimateTokens(text: string): number {
       nonAsciiCount++;
     }
   }
-  return Math.ceil(asciiCount / 3.7 + nonAsciiCount / 1.5);
+  return Math.ceil(asciiCount / 3.0 + nonAsciiCount / 1.2);
 }
 
 /**
- * Estimates total tokens consumed by all messages in a session plus optional draft input.
+ * Estimates tokens consumed by tool definitions serialized into API requests.
+ */
+export function estimateToolsTokens(tools: ChatTool[]): number {
+  if (!tools || tools.length === 0) return 0;
+  return estimateTokens(JSON.stringify(tools));
+}
+
+export type EstimateSessionOptions = {
+  pinnedTokens?: number;
+  toolTokens?: number;
+};
+
+/**
+ * Estimates total tokens consumed by all messages in a session plus optional
+ * draft input, pinned files, and tool definitions.
  * Includes chat format overhead (~4 tokens per message).
  */
 export function estimateSessionTokens(
   messages: StoredContextMessage[],
   draftInput?: string,
+  options?: EstimateSessionOptions,
 ): number {
   let total = 0;
   for (const msg of messages) {
@@ -93,6 +109,24 @@ export function estimateSessionTokens(
         }
       }
     }
+    if (msg.responses_reasoning_items && Array.isArray(msg.responses_reasoning_items)) {
+      for (const item of msg.responses_reasoning_items) {
+        total += 4;
+        if (item.summary && item.summary.length > 0) {
+          total += estimateTokens(JSON.stringify(item.summary));
+        }
+        if (item.encrypted_content) {
+          total += Math.ceil(item.encrypted_content.length / 4);
+        }
+      }
+    }
+  }
+
+  if (options?.pinnedTokens && options.pinnedTokens > 0) {
+    total += options.pinnedTokens;
+  }
+  if (options?.toolTokens && options.toolTokens > 0) {
+    total += options.toolTokens;
   }
 
   if (draftInput && draftInput.trim().length > 0) {

@@ -50,6 +50,7 @@ export interface AgentBackend {
 
   getSessionMessages?(): StoredContextMessage[];
   compactContext?(): Promise<{ compactedCount: number; deferred?: boolean }>;
+  compactPinnedFileMessages?(filePath: string): Promise<number>;
   deleteContextItem?(itemId: string): Promise<boolean>;
 
   dispose(): void;

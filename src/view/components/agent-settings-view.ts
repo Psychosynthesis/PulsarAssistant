@@ -16,6 +16,7 @@ export interface AgentSettingsHost {
   closeOtherMenus(): void;
   openBuildCommand(): void;
   openTestCommand(): void;
+  openAutoPinThreshold(): void;
   openProxySettings(): void;
   editConfiguration(): void;
   manageProjectsAndStorage(): void;
@@ -61,6 +62,7 @@ export class AgentSettingsView {
     this.menu.setAttribute("aria-label", "Project settings");
     this.addItem("Set build command…", () => host.openBuildCommand());
     this.addItem("Set test command…", () => host.openTestCommand());
+    this.addItem("Set auto-pin threshold…", () => host.openAutoPinThreshold());
     this.addItem("Set proxy…", () => host.openProxySettings());
     this.addItem("Edit configuration…", () => host.editConfiguration());
     this.addItem("Manage projects & storage…", () => host.manageProjectsAndStorage());

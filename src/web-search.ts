@@ -186,14 +186,26 @@ export async function deepseekFetch(
     signal,
   });
   const parsed = await parseDeepSeekResponse(response, "fetch");
-  const data = parsed.data;
+  const data =
+    parsed.data && typeof parsed.data === "object"
+      ? (parsed.data as Record<string, unknown>)
+      : null;
   const content =
-    data && typeof data === "object"
-      ? typeof (data as Record<string, unknown>).content === "string"
-        ? ((data as Record<string, unknown>).content as string)
-        : typeof (data as Record<string, unknown>).text === "string"
-          ? ((data as Record<string, unknown>).text as string)
-          : ""
-      : "";
-  return content.slice(0, MAX_FETCH_CHARS);
+    typeof parsed.content === "string"
+      ? parsed.content
+      : typeof parsed.text === "string"
+        ? parsed.text
+        : data && typeof data.content === "string"
+          ? data.content
+          : data && typeof data.text === "string"
+            ? data.text
+            : "";
+  const title =
+    typeof parsed.title === "string"
+      ? parsed.title.trim()
+      : data && typeof data.title === "string"
+        ? data.title.trim()
+        : "";
+  const output = title && content ? `# ${title}\n\n${content}` : content;
+  return output.slice(0, MAX_FETCH_CHARS);
 }

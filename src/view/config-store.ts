@@ -111,8 +111,10 @@ function writeProjectPolicyField(
     | "buildCommand"
     | "maxTurnRequests"
     | "toolCallDelayMs"
-    | "toolOutputCompactInterval",
-  value: string | number | null,
+    | "toolOutputCompactInterval"
+    | "autoPinThreshold"
+    | "includeUsage",
+  value: string | number | boolean | null,
 ): void {
   const raw = atom.config.get(CFG_PROJECTS);
   const projects: Record<string, unknown> = isObject(raw) ? { ...raw } : {};
@@ -187,4 +189,18 @@ export function setProjectToolOutputCompactInterval(
   value: number | null,
 ): void {
   writeProjectPolicyField(projectRoot, "toolOutputCompactInterval", value);
+}
+
+export function setProjectAutoPinThreshold(
+  projectRoot: string,
+  value: number | null,
+): void {
+  writeProjectPolicyField(projectRoot, "autoPinThreshold", value);
+}
+
+export function setProjectIncludeUsage(
+  projectRoot: string,
+  value: boolean | null,
+): void {
+  writeProjectPolicyField(projectRoot, "includeUsage", value);
 }

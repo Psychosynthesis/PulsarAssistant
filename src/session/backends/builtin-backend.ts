@@ -240,6 +240,11 @@ export class BuiltinBackend implements AgentBackend {
     return this.builtin.compactContext(id);
   }
 
+  async compactPinnedFileMessages(filePath: string): Promise<number> {
+    if (!this.builtin || !this.sessionId) return 0;
+    return this.builtin.compactPinnedFileMessages(this.sessionId, filePath);
+  }
+
   async deleteContextItem(itemId: string): Promise<boolean> {
     if (!this.builtin || !this.sessionId) return false;
     return await this.builtin.deleteContextItem(this.sessionId, itemId);
@@ -283,15 +288,13 @@ export class BuiltinBackend implements AgentBackend {
       },
       writeTextFile: async (params) => {
         await this.editor.writeTextFile(params.path, params.content);
-        await this.fileTreeManager.getFileTree().updatePath(params.path);
+        await this.fileTreeManager.notifyPathModified(params.path);
         this.emit({ type: "file-written", path: params.path });
       },
       moveTextFile: async (params) => {
         await this.editor.moveTextFile(params.sourcePath, params.destinationPath);
-        this.fileTreeManager.getFileTree().remove(params.sourcePath);
-        await this.fileTreeManager
-          .getFileTree()
-          .updatePath(params.destinationPath);
+        await this.fileTreeManager.notifyPathModified(params.sourcePath);
+        await this.fileTreeManager.notifyPathModified(params.destinationPath);
         this.emit({ type: "file-written", path: params.destinationPath });
       },
       getPinnedFiles: () => this.pinnedStore?.getPinnedFiles() ?? [],
